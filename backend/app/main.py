@@ -1,36 +1,58 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from app.langgraph_agent.graph_setup import setup_graph
+from app.langgraph_agent.state_manager import StateManager
 
-# Import route modules from the package-local `app.routes`. Because this
-# `main.py` lives at `backend/app/main.py`, package-relative imports work
-# consistently whether you run `uvicorn app.main:app` from inside
-# `backend/` or `uvicorn backend.app.main:app` from the repository root.
-from .langgraph_agent import chat, jobs, user
-
-
+# Initialize FastAPI app
 app = FastAPI(title="BranchingOutAI Backend")
 
-# CORS setup (allow frontend to talk to backend)
+# Allow frontend to call the backend (important for Next.js)
 app.add_middleware(
-	CORSMiddleware,
-	allow_origins=["*"],  # for dev; restrict in prod
-	allow_credentials=True,
-	allow_methods=["*"],
-	allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],  # you can restrict to your frontend domain later
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Include route modules
-app.include_router(chat.router, prefix="/chatbot")
-app.include_router(jobs.router, prefix="/jobs")
-app.include_router(user.router, prefix="/user")
+# Initialize graph and state
+graph = setup_graph()
+state_manager = StateManager()
 
+@app.get("/")
+def root():
+    return {"message": "🌿 BranchingOutAI Backend Running!"}
 
-@app.get("/", tags=["health"])
-async def root():
-	"""Simple health check so the root path returns a friendly JSON."""
-	return {"status": "ok", "service": "BranchingOutAI Backend"}
+@app.post("/chatbot/")
+async def chatbot(request: Request):
+    """
+    Handles chat requests from the frontend.
+    Passes input through the LangGraph agent.
+    """
+    data = await request.json()
+    user_id = data.get("user_id", "default_user")
+    user_input = data.get("message", "")
 
+    # Retrieve user's state
+    state = state_manager.get_state(user_id)
 
-@chat.router.post("/")
-async def get_chat_reply(request: chat.ChatRequest):
-	return chat.ChatResponse(reply=f"You said: {request.message}")
+    # Determine current node (very simple logic for now)
+    if "interests" not in state:
+        current_node = graph.get_node("interests_node")
+    elif "industry" not in state:
+        current_node = graph.get_node("industry_node")
+    elif "selected_job" not in state:
+        current_node = graph.get_node("job_node")
+    else:
+        current_node = graph.get_node("skills_node")
+
+    # Run the current node
+    response = current_node.process(user_input, state)
+
+    # Update user state
+    updated_state = state_manager.update_state(user_id, state)
+
+    return {
+        "response": response,
+        "state": updated_state
+    }
