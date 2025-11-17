@@ -1,58 +1,51 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from app.langgraph_agent.graph_setup import setup_graph
-from app.langgraph_agent.state_manager import StateManager
 
-# Initialize FastAPI app
-app = FastAPI(title="BranchingOutAI Backend")
+from app.state_manager import state_manager
+from app.graph_setup import graph_manager
 
-# Allow frontend to call the backend (important for Next.js)
+app = FastAPI()
+
+# Allow frontend connection
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # you can restrict to your frontend domain later
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-# Initialize graph and state
-graph = setup_graph()
-state_manager = StateManager()
+class ChatRequest(BaseModel):
+    session_id: str # Unique session identifier
+    user_input: str # User's input text
 
-@app.get("/")
-def root():
-    return {"message": "🌿 BranchingOutAI Backend Running!"}
-
-@app.post("/chatbot/")
-async def chatbot(request: Request):
+@app.post("/chatbot/") # Endpoint for chatbot interaction
+def chatbot(req: ChatRequest):
+    """Handles chatbot requests and routes through graph nodes based on session state.
+    
+    Args:
+        req (ChatRequest): The incoming request with session ID and user input.
     """
-    Handles chat requests from the frontend.
-    Passes input through the LangGraph agent.
-    """
-    data = await request.json()
-    user_id = data.get("user_id", "default_user")
-    user_input = data.get("message", "")
+    state = state_manager.get_state(req.session_id)
 
-    # Retrieve user's state
-    state = state_manager.get_state(user_id)
-
-    # Determine current node (very simple logic for now)
+    # Determine which node to run next
     if "interests" not in state:
-        current_node = graph.get_node("interests_node")
+        node = graph_manager.get_node("interests_node")
     elif "industry" not in state:
-        current_node = graph.get_node("industry_node")
+        node = graph_manager.get_node("industry_node")
     elif "selected_job" not in state:
-        current_node = graph.get_node("job_node")
-    else:
-        current_node = graph.get_node("skills_node")
+        node = graph_manager.get_node("job_node")
+    else: # All info gathered, suggest skills
+        node = graph_manager.get_node("skills_node")
 
-    # Run the current node
-    response = current_node.process(user_input, state)
+    # Run the node (process input and update state)
+    output, updated_state = node.process(req.user_input, state)
 
-    # Update user state
-    updated_state = state_manager.update_state(user_id, state)
+    # Save the state for the next request
+    state_manager.save_state(req.session_id, updated_state)
 
-    return {
-        "response": response,
+    return { # Return chatbot response and updated state
+        "response": output,
         "state": updated_state
     }
