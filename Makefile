@@ -1,4 +1,4 @@
-PYTHON := /Users/ainsleyfreedman/projects/branchingoutai/.venv/bin/python
+PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || command -v python3 || echo python)
 BACKEND_DIR := backend
 APP_MODULE := app.main:app
 HOST := 127.0.0.1
@@ -28,3 +28,7 @@ backend-down: ## Stop detached backend started via backend-up
 
 help: ## Show available Make targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/: /'
+
+test: ## Run pytest inside the project virtualenv
+	@echo "Running tests with $(PYTHON)"
+	@$(PYTHON) -m pytest -q
