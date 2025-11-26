@@ -45,3 +45,24 @@ curl -s -X POST http://127.0.0.1:8000/chatbot/ \
 	-H 'Content-Type: application/json' \
 	-d '{"session_id":"demo","user_input":"I like design"}'
 ```
+
+### Persistence & State Normalization
+The backend persists session state to Supabase (table `session_states`) when a
+`session_id` is provided. Before persisting, the backend will automatically
+normalize model outputs by parsing JSON strings (including JSON returned inside
+triple-backtick code fences) into native JSON structures (lists/dicts). This
+ensures the stored `state` field contains structured data that the frontend and
+router can consume safely.
+
+Key points:
+- To enable Supabase persistence, set `SUPABASE_URL` and `SUPABASE_KEY` in
+	your `.env` (the code expects `SUPABASE_KEY`). If you only have a
+	`SUPABASE_SERVICE_KEY`, set `SUPABASE_KEY` to that value as well.
+- There's a convenience endpoint to inspect saved state:
+	`GET /session/{session_id}` — returns the normalized saved state for debug.
+
+Example: fetch a saved session after posting to `/chatbot/`:
+```
+curl -s http://127.0.0.1:8000/session/test-live-1
+```
+

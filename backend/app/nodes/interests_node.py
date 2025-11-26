@@ -16,10 +16,13 @@ class InterestsNode:
         if session_id:
             saved = get_state(session_id)
             if isinstance(saved, dict):
-                state = saved
+                # Merge saved state with incoming state, preferring incoming values
+                merged = dict(saved)
+                merged.update(state or {})
+                state = merged
         state = state or {}
 
-        # Save user interests
+        # Save user interests (incoming user_input should take precedence)
         state["interests"] = user_input
 
         # Ask OpenAI for 2-3 industries

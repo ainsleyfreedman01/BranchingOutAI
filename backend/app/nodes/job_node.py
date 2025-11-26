@@ -17,7 +17,9 @@ class JobNode:
         if session_id:
             saved = get_state(session_id)
             if isinstance(saved, dict):
-                state = saved
+                merged = dict(saved)
+                merged.update(state or {})
+                state = merged
         state = state or {}
 
         state["selected_job_family"] = user_input
