@@ -31,4 +31,4 @@ help: ## Show available Make targets
 
 test: ## Run pytest inside the project virtualenv
 	@echo "Running tests with $(PYTHON)"
-	@$(PYTHON) -m pytest -q
+	@PYTHONPATH=$(BACKEND_DIR) $(PYTHON) -m pytest -q
