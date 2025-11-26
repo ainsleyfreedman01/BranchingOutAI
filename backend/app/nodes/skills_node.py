@@ -1,6 +1,6 @@
 # backend/app/langgraph_agent/nodes/skills_node.py
 from app.config import client
-from app.state_manager import save_state
+from app.state_manager import save_state, get_state
 
 class SkillsNode:
     def process(self, user_input, state, session_id=None):
@@ -12,6 +12,13 @@ class SkillsNode:
             state (dict): The current session state.
             session_id (str, optional): The user's session ID for state saving.
         """
+        # Load saved state when possible
+        if session_id:
+            saved = get_state(session_id)
+            if isinstance(saved, dict):
+                state = saved
+        state = state or {}
+
         state["selected_job"] = user_input
 
         response = client.chat(

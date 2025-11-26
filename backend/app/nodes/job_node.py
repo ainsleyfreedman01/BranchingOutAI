@@ -1,6 +1,6 @@
 # backend/app/langgraph_agent/nodes/job_node.py
 from app.config import client
-from app.state_manager import save_state
+from app.state_manager import save_state, get_state
 
 class JobNode:
     def process(self, user_input, state, session_id=None, use_live_jobs=False):
@@ -13,6 +13,13 @@ class JobNode:
             session_id (str, optional): The user's session ID for state saving.
             use_live_jobs (bool, optional): Whether to use live job data from TheirStack API.
         """
+        # Load saved state if session id provided
+        if session_id:
+            saved = get_state(session_id)
+            if isinstance(saved, dict):
+                state = saved
+        state = state or {}
+
         state["selected_job_family"] = user_input
 
         if use_live_jobs:

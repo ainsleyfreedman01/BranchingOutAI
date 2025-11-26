@@ -1,6 +1,6 @@
 # backend/app/langgraph_agent/nodes/interests_node.py
 from app.config import client
-from app.state_manager import save_state
+from app.state_manager import save_state, get_state
 
 class InterestsNode:
     def process(self, user_input, state, session_id=None):
@@ -12,6 +12,13 @@ class InterestsNode:
             state (dict): The current session state.
             session_id (str, optional): The user's session ID for state saving.
         """
+        # If session_id provided, prefer latest saved state from Supabase
+        if session_id:
+            saved = get_state(session_id)
+            if isinstance(saved, dict):
+                state = saved
+        state = state or {}
+
         # Save user interests
         state["interests"] = user_input
 
