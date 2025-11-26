@@ -1,23 +1,31 @@
 # backend/app/langgraph_agent/nodes/industry_node.py
 from app.config import client
+from app.state_manager import save_state
 
 class IndustryNode:
-    def process(self, user_input, state):
-        """Process selected industry and suggest job roles.
-        
+    def process(self, user_input, state, session_id=None):
+        """Process selected industry to suggest job families.
+
         Args:
             self: IndustryNode instance.
             user_input (str): The user's selected industry.
             state (dict): The current session state.
+            session_id (str, optional): The user's session ID for state saving.
         """
-        state["industry"] = user_input
+        state["selected_industry"] = user_input
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        # Ask OpenAI for 2–3 job families
+        response = client.chat(
             messages=[
-                {"role": "system", "content": "You are a helpful career exploration assistant."},
-                {"role": "user", "content": f"User selected industry: {user_input}. Suggest 5 job roles in this industry."}
+                {"role": "system", "content": "You suggest job families in an industry."},
+                {"role": "user", "content": f"Industry: {user_input}. Suggest 2-3 job families. Return JSON list only."}
             ]
         )
 
-        return response.choices[0].message.content, state
+        state["job_families"] = response
+
+        # Save to Supabase
+        if session_id:
+            save_state(session_id, state)
+
+        return "Here are some job families in this industry.", state

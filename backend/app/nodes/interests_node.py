@@ -1,25 +1,32 @@
 # backend/app/langgraph_agent/nodes/interests_node.py
 from app.config import client
+from app.state_manager import save_state
 
 class InterestsNode:
-    def process(self, user_input, state):
-        """Process user interests and suggest industries.
-        
+    def process(self, user_input, state, session_id=None):
+        """Process user interests to suggest industries.
+
         Args:
             self: InterestsNode instance.
             user_input (str): The user's stated interests.
             state (dict): The current session state.
+            session_id (str, optional): The user's session ID for state saving.
         """
-        # Store interests
+        # Save user interests
         state["interests"] = user_input
 
-        # Chatbot response
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        # Ask OpenAI for 2-3 industries
+        response = client.chat(
             messages=[
-                {"role": "system", "content": "You are a helpful career exploration assistant."},
-                {"role": "user", "content": f"The user's interests: {user_input}. Suggest 3 industries they might explore next."}
+                {"role": "system", "content": "You are a career exploration AI."},
+                {"role": "user", "content": f"The user is interested in: {user_input}. Suggest 2-3 broad industries. Return JSON list only."}
             ]
         )
 
-        return response.choices[0].message.content, state
+        state["industries"] = response
+
+        # Save to Supabase
+        if session_id:
+            save_state(session_id, state)
+
+        return "Here are some industries you might explore.", state

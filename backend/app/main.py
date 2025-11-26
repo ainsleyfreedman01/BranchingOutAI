@@ -1,51 +1,55 @@
+# backend/app/main.py
 from fastapi import FastAPI
 from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
+from app.graph_setup import agent_graph
+from app.state_manager import get_state, save_state
 
-from app.state_manager import state_manager
-from app.graph_setup import graph_manager
+# FastAPI instance
+app = FastAPI(title="BranchingOutAI Backend")
 
-app = FastAPI()
+# Pydantic model for request validation
+class ChatInput(BaseModel):
+    session_id: str      # unique per user
+    user_input: str      # text input from user
 
-# Allow frontend connection
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-class ChatRequest(BaseModel):
-    session_id: str # Unique session identifier
-    user_input: str # User's input text
-
-@app.post("/chatbot/") # Endpoint for chatbot interaction
-def chatbot(req: ChatRequest):
-    """Handles chatbot requests and routes through graph nodes based on session state.
+# Endpoint to interact with the chatbot
+@app.post("/chatbot/")
+async def chatbot_endpoint(data: ChatInput):
+    """Handle chatbot interaction.
     
     Args:
-        req (ChatRequest): The incoming request with session ID and user input.
+        data (ChatInput): The input data containing session_id and user_input.
+        
+    Returns:
+        dict: The chatbot's response and updated state.
     """
-    state = state_manager.get_state(req.session_id)
-
-    # Determine which node to run next
-    if "interests" not in state:
-        node = graph_manager.get_node("interests_node")
-    elif "industry" not in state:
-        node = graph_manager.get_node("industry_node")
-    elif "selected_job" not in state:
-        node = graph_manager.get_node("job_node")
-    else: # All info gathered, suggest skills
-        node = graph_manager.get_node("skills_node")
-
-    # Run the node (process input and update state)
-    output, updated_state = node.process(req.user_input, state)
-
-    # Save the state for the next request
-    state_manager.save_state(req.session_id, updated_state)
-
-    return { # Return chatbot response and updated state
-        "response": output,
+    # Load previous state from Supabase (or empty dict if new session)
+    state = get_state(data.session_id)
+    
+    # Add user input to the state
+    state["user_input"] = data.user_input
+    
+    # Run one step of the LangGraph agent
+    response, updated_state = agent_graph.step(state, session_id=data.session_id)
+    
+    # Save updated state to Supabase
+    save_state(data.session_id, updated_state)
+    
+    # 5️⃣ Return response and updated state
+    return {
+        "response": response,
         "state": updated_state
     }
+
+# Optional: health check
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+# Root route for quick checks / browser
+@app.get("/")
+async def root():
+    """Root route for quick checks / browser."""
+    return {"message": "🌿 BranchingOutAI Backend Running!"}

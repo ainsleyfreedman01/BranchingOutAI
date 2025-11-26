@@ -1,23 +1,35 @@
 # backend/app/langgraph_agent/nodes/job_node.py
 from app.config import client
+from app.state_manager import save_state
 
 class JobNode:
-    def process(self, user_input, state):
-        """Process selected job role and explain it.
-        
+    def process(self, user_input, state, session_id=None, use_live_jobs=False):
+        """Process selected job family to suggest specific jobs.
+
         Args:
             self: JobNode instance.
-            user_input (str): The user's selected job role.
+            user_input (str): The user's selected job family.
             state (dict): The current session state.
+            session_id (str, optional): The user's session ID for state saving.
+            use_live_jobs (bool, optional): Whether to use live job data from TheirStack API.
         """
-        state["selected_job"] = user_input
+        state["selected_job_family"] = user_input
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You explain job roles clearly."},
-                {"role": "user", "content": f"Explain the job '{user_input}' in 3 sentences, and list 5 required skills."}
-            ]
-        )
+        if use_live_jobs:
+            # Placeholder for TheirStack API
+            jobs = ["Job1", "Job2", "Job3"]
+        else:
+            response = client.chat(
+                messages=[
+                    {"role": "system", "content": "You suggest specific job titles."},
+                    {"role": "user", "content": f"Job family: {user_input}. Suggest 3-4 job titles. Return JSON list only."}
+                ]
+            )
+            jobs = response
 
-        return response.choices[0].message.content, state
+        state["jobs"] = jobs
+
+        if session_id:
+            save_state(session_id, state)
+
+        return "Here are some jobs you might explore.", state
