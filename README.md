@@ -1,5 +1,7 @@
 # BranchingOutAI
 
+[![CI](https://github.com/ainsleyfreedman01/BranchingOutAI/actions/workflows/ci.yml/badge.svg)](https://github.com/ainsleyfreedman01/BranchingOutAI/actions/workflows/ci.yml)
+
 BranchingOutAI is an interactive career exploration tool that uses a graph-based AI agent
 to help users explore industries, jobs, and skills. The frontend visualizes branching career paths 
 using JointJS, and the backend handles AI reasoning, memory, and job data integration.
