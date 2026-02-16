@@ -1,6 +1,7 @@
 # backend/app/langgraph_agent/nodes/skills_node.py
 from app.config import client
 from app.state_manager import save_state, get_state
+from app.utils.keywords import extract_keywords
 
 class SkillsNode:
     def process(self, user_input, state, session_id=None):
@@ -21,12 +22,14 @@ class SkillsNode:
                     state = merged
         state = state or {}
 
-        state["selected_job"] = user_input
+        # Use extracted keywords (concise) for the selected job
+        kws = extract_keywords(user_input, max_keywords=1)
+        state["selected_job"] = kws[0] if kws else user_input
 
         response = client.chat(
             messages=[
                 {"role": "system", "content": "You provide hard and soft skills for a job."},
-                {"role": "user", "content": f"Job title: {user_input}. List 3-5 hard skills and 3-5 soft skills. Return JSON with keys 'hard_skills' and 'soft_skills'."}
+                {"role": "user", "content": f"Job title: {state['selected_job']}. List 3-5 hard skills and 3-5 soft skills. Return JSON with keys 'hard_skills' and 'soft_skills'."}
             ]
         )
 

@@ -29,9 +29,24 @@ async def chatbot_endpoint(data: ChatInput, x_user_id: str | None = Header(None)
     
     # Add user input to the state
     state["user_input"] = data.user_input
+
+    # If new input arrives, reset dependent fields so the graph recomputes from interests
+    for k in [
+        "interests",
+        "industries",
+        "selected_industry",
+        "job_families",
+        "selected_job_family",
+        "jobs",
+        "selected_job",
+        "skills",
+    ]:
+        if k in state:
+            del state[k]
     
     # Run one step of the LangGraph agent
-    response, updated_state = agent_graph.step(state, session_id=data.session_id)
+    # Run step without loading from storage inside nodes to avoid reusing stale fields
+    response, updated_state = agent_graph.step(state, session_id=None)
     
     # Save updated state to Supabase
     save_state(data.session_id, updated_state, user_id=x_user_id)
@@ -39,7 +54,7 @@ async def chatbot_endpoint(data: ChatInput, x_user_id: str | None = Header(None)
     # Normalize state values so frontend receives structured JSON where possible
     normalized_state = normalize_state(updated_state)
 
-    # 5️⃣ Return response and normalized state
+    # Return response and normalized state
     return {
         "response": response,
         "state": normalized_state,

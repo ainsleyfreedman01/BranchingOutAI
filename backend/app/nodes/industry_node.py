@@ -1,6 +1,7 @@
 # backend/app/langgraph_agent/nodes/industry_node.py
 from app.config import client
 from app.state_manager import save_state, get_state
+from app.utils.keywords import extract_keywords
 
 class IndustryNode:
     def process(self, user_input, state, session_id=None):
@@ -21,13 +22,15 @@ class IndustryNode:
                 state = merged
         state = state or {}
 
-        state["selected_industry"] = user_input
+        # Use extracted keywords (concise) for the selected industry field
+        kws = extract_keywords(user_input, max_keywords=1)
+        state["selected_industry"] = kws[0] if kws else user_input
 
         # Ask OpenAI for 2–3 job families
         response = client.chat(
             messages=[
                 {"role": "system", "content": "You suggest job families in an industry."},
-                {"role": "user", "content": f"Industry: {user_input}. Suggest 2-3 job families. Return JSON list only."}
+                {"role": "user", "content": f"Industry: {state['selected_industry']}. Suggest 2-3 job families. Return JSON list only."}
             ]
         )
 

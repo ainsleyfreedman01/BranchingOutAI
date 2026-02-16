@@ -60,3 +60,7 @@ websockets==15.0.1
 xxhash==3.6.0
 yarl==1.22.0
 zstandard==0.25.0
+
+spacy
+# The small English model will be downloaded into the environment during setup:
+#   python -m spacy download en_core_web_sm
