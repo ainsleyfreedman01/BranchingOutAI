@@ -1,7 +1,9 @@
 import types
+import pytest
 from app.graph_setup import agent_graph
 
 
+@pytest.mark.integration
 def test_agent_graph_nodes_integration(monkeypatch):
     """Integration test that exercises interests -> industry -> job -> skills nodes.
 

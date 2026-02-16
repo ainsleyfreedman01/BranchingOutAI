@@ -39,5 +39,5 @@ jobs:
           # Ensure PYTHONPATH points at backend so `app` imports resolve
           PYTHONPATH: backend
         run: |
-          # Skip long-running or external integration tests by excluding files/markers with 'integration'
-          pytest -q -k "not integration"
+          # Skip integration tests (marked) to keep unit workflow fast and deterministic
+          pytest -q -m "not integration"

@@ -42,4 +42,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          pytest -q -k "integration"
+          # Run only tests explicitly marked as integration
+          pytest -q -m integration

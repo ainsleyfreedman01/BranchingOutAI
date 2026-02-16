@@ -2,8 +2,10 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.state_manager import get_state
 import json
+import pytest
 
 
+@pytest.mark.integration
 def test_post_and_get_session_roundtrip():
     client = TestClient(app)
     sid = "int-test-1"
