@@ -333,40 +333,62 @@ class InterestsNode:
         # Always replace interests with the canonical ones extracted from current input
         state["interests"] = final_interests if final_interests else ([user_input] if user_input else [])
 
-        # Ask OpenAI for 2-3 industries (JSON list only)
-        response = client.chat(
-            messages=[
-                {"role": "system", "content": "You are a career exploration AI."},
-                {"role": "user", "content": f"The user is interested in: {', '.join(final_interests) if final_interests else user_input}. Suggest 2-3 broad industries. Return ONLY a JSON array (no code fences)."}
-            ]
-        )
-        # Robustly normalize response to a Python list
-        resp_text = str(response).strip()
-        # Strip common code fences if present
-        resp_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", resp_text, flags=re.I|re.M)
+        # Ask OpenAI for 2-3 industries (JSON list only). This call may fail
+        # in environments without OPENAI_API_KEY or network access; in that
+        # case we fall back to a deterministic heuristic.
         industries_list = None
         try:
-            import json
-            parsed = json.loads(resp_text)
-            if isinstance(parsed, list):
-                industries_list = [str(x).strip() for x in parsed if str(x).strip()]
-        except Exception:
-            pass
-        if industries_list is None:
-            # Attempt to extract a bracketed JSON array from the text
-            m = re.search(r"\[(.*?)\]", resp_text, re.S)
-            if m:
+            response = client.chat(
+                messages=[
+                    {"role": "system", "content": "You are a career exploration AI."},
+                    {"role": "user", "content": f"The user is interested in: {', '.join(final_interests) if final_interests else user_input}. Suggest 2-3 broad industries. Return ONLY a JSON array (no code fences)."}
+                ]
+            )
+
+            # If the client returned a list-like object already, use it
+            if isinstance(response, (list, tuple)):
+                industries_list = [str(x).strip() for x in response if str(x).strip()]
+            else:
+                # Robustly normalize response to a Python list
+                resp_text = str(response).strip()
+                # Strip common code fences if present
+                resp_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", resp_text, flags=re.I|re.M)
                 try:
                     import json
-                    parsed = json.loads("[" + m.group(1) + "]")
+                    parsed = json.loads(resp_text)
                     if isinstance(parsed, list):
                         industries_list = [str(x).strip() for x in parsed if str(x).strip()]
                 except Exception:
-                    industries_list = None
-        if industries_list is None:
-            # Fallback: best-effort plain text split
-            parts = [s.strip() for s in re.split(r",|/|;|\n", resp_text) if s.strip()]
-            industries_list = parts[:3]
+                    # Attempt to extract a bracketed JSON array from the text
+                    m = re.search(r"\[(.*?)\]", resp_text, re.S)
+                    if m:
+                        try:
+                            candidate = "[" + m.group(1) + "]"
+                            try:
+                                parsed = json.loads(candidate)
+                            except Exception:
+                                # Handle Python-style repr lists using single quotes
+                                try:
+                                    parsed = json.loads(candidate.replace("'", '"'))
+                                except Exception:
+                                    parsed = None
+                            if isinstance(parsed, list):
+                                industries_list = [str(x).strip() for x in parsed if str(x).strip()]
+                        except Exception:
+                            industries_list = None
+                if industries_list is None:
+                    # Fallback: best-effort plain text split of the response
+                    parts = [s.strip() for s in re.split(r",|/|;|\n", resp_text) if s.strip()]
+                    industries_list = parts[:3]
+        except Exception:
+            # If the LLM call fails (no API key, network issues), fall back
+            # to a deterministic heuristic based on extracted interests or
+            # the original user input.
+            src = final_interests if final_interests else [user_input]
+            combined = ", ".join(src)
+            parts = [s.strip() for s in re.split(r",|/|;|\n", combined) if s.strip()]
+            # Pick a few broad terms from the interests as best-effort industries
+            industries_list = [p.title() for p in parts][:3]
         state["industries"] = industries_list
 
         # Save to Supabase

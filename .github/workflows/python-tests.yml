@@ -38,6 +38,18 @@ jobs:
           elif [ -f backend/requirements.txt ]; then
             pip install -r backend/requirements.txt
           fi
+      - name: Download spaCy model if available
+        run: |
+          # If spaCy was installed by requirements, download the small English model
+          python -c "import importlib,sys
+try:
+    importlib.import_module('spacy')
+    print('spacy installed; downloading en_core_web_sm')
+    import subprocess
+    subprocess.run([sys.executable, '-m', 'spacy', 'download', 'en_core_web_sm'], check=True)
+except Exception:
+    print('spaCy not installed; skipping model download')
+"
 
       - name: Run tests (unit)
         env:
