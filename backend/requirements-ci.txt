@@ -1,0 +1,9 @@
+fastapi==0.121.0
+pytest==7.4.0
+httpx==0.28.1
+uvicorn==0.22.0
+starlette==0.26.1
+pydantic==2.12.3
+python-dotenv==1.2.1
+requests==2.32.5
+typing-extensions==4.5.0

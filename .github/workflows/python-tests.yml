@@ -32,7 +32,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+          # Prefer a small CI requirements file to keep installs fast and reliable.
+          if [ -f backend/requirements-ci.txt ]; then
+            pip install -r backend/requirements-ci.txt
+          elif [ -f backend/requirements.txt ]; then
+            pip install -r backend/requirements.txt
+          fi
 
       - name: Run tests (unit)
         env:
