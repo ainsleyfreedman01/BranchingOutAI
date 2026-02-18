@@ -9,6 +9,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Ensure CI runs deterministically when secrets are not provided
+      OPENAI_API_KEY: ""
+      SUPABASE_URL: ""
+      SUPABASE_KEY: ""
+      # Ensure tests import the backend `app` package
+      PYTHONPATH: backend
     strategy:
       matrix:
         python-version: [3.11]
@@ -52,9 +59,6 @@ except Exception:
 "
 
       - name: Run tests (unit)
-        env:
-          # Ensure PYTHONPATH points at backend so `app` imports resolve
-          PYTHONPATH: backend
         run: |
           # Skip integration tests (marked) to keep unit workflow fast and deterministic
           pytest -q -m "not integration"
