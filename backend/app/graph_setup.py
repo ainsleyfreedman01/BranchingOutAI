@@ -42,6 +42,25 @@ class AgentGraph:
         single node to run next. When running an individual node, call its
         `process` method directly so behavior is unchanged.
         """
+        # If we constructed a real LangChain runner, prefer to run the
+        # graph runner which can manage orchestration end-to-end.
+        runner = getattr(self, "_runner", None)
+        if runner is not None and getattr(runner, "_uses_langchain", False):
+            # The Graph/runner is expected to accept the state and return
+            # (output, state) or similar. We call run with the session id
+            # when supported.
+            try:
+                # Some Graph implementations accept a dict and return (out, state)
+                return runner.run(state, session_id=session_id)
+            except TypeError:
+                # Fallback to calling run(state) if session_id not supported
+                return runner.run(state)
+            except Exception:
+                # If the langchain runner fails for any reason, fall back to
+                # the legacy RouterNode + node.process flow.
+                pass
+
+        # Legacy, fine-grained behavior: use RouterNode to pick the next node
         next_name = self.router.process(state)
         if next_name == "END":
             return "Session complete.", state

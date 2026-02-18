@@ -8,6 +8,7 @@ The goal is to make the codebase compatible with LangChain-style graphs
 without changing node implementations or public behavior.
 """
 from typing import Any, Dict, Iterable, Optional
+from app.langchain_wrappers import LangChainNodeWrapper
 
 try:
     # Prefer an actual LangChain / LangGraph implementation when available.
@@ -54,11 +55,21 @@ def create_graph_runner(nodes: Iterable[Any]):
     Otherwise the lightweight shim is used.
     """
     if _HAS_LANGCHAIN and Graph is not None:
-        # If a Graph class is available, try to create a graph wrapper.
+        # Wrap nodes so the Graph receives objects with a consistent interface
+        wrapped = [LangChainNodeWrapper(n, name=getattr(n, "__class__", type(n)).__name__) for n in nodes]
         try:
-            g = Graph(nodes)
+            g = Graph(wrapped)
+            # Annotate so callers can detect a real LangChain runner
+            try:
+                setattr(g, "_uses_langchain", True)
+            except Exception:
+                pass
             return g
         except Exception:
             # Fall back to shim if constructing Graph fails
-            return LangChainShim(nodes)
-    return LangChainShim(nodes)
+            shim = LangChainShim(nodes)
+            shim._uses_langchain = False
+            return shim
+    shim = LangChainShim(nodes)
+    shim._uses_langchain = False
+    return shim

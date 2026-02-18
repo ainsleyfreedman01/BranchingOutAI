@@ -74,12 +74,21 @@ def extract_keywords(text: str, max_keywords: int = 3) -> List[str]:
                     return ""
                 return " ".join(toks).title()
 
-            # Global greedy non-overlapping noun bigrams to strongly prefer phrases
-            noun_seq = [t for t in doc if t.pos_ in ("NOUN", "PROPN")]
+            # Global greedy non-overlapping phrase bigrams. Prefer adjective+noun
+            # sequences when available (e.g., 'social work' where 'social' is ADJ).
+            tokens_for_pairs = []
+            for idx, tok in enumerate(doc):
+                # If token is a noun/proper noun, include it and any immediate
+                # preceding adjective to capture adjective+noun phrases.
+                if tok.pos_ in ("NOUN", "PROPN"):
+                    if idx > 0 and doc[idx - 1].pos_ == "ADJ":
+                        tokens_for_pairs.append(doc[idx - 1])
+                    tokens_for_pairs.append(tok)
+
             i = 0
-            while i < len(noun_seq) - 1 and len(keywords) < max_keywords:
-                a = noun_seq[i].text
-                b = noun_seq[i+1].text
+            while i < len(tokens_for_pairs) - 1 and len(keywords) < max_keywords:
+                a = tokens_for_pairs[i].text
+                b = tokens_for_pairs[i + 1].text
                 pair_clean = _clean_phrase(f"{a} {b}")
                 if pair_clean:
                     pl = pair_clean.lower()
@@ -182,11 +191,16 @@ def extract_keywords(text: str, max_keywords: int = 3) -> List[str]:
     cleaned = re.sub(r"[^\w\s-]", " ", text.lower())
     tokens = [t for t in cleaned.split() if len(t) > 1 and t not in _STOPWORDS]
 
-    # Build bigrams from adjacent non-stopword tokens, prefer bigrams when present
+    # Build non-overlapping bigrams from adjacent non-stopword tokens.
+    # This favors distinct phrase pairs in messy, run-on inputs
     bigrams = []
-    for a, b in zip(tokens, tokens[1:]):
+    i = 0
+    while i < len(tokens) - 1:
+        a = tokens[i]
+        b = tokens[i + 1]
         if a not in _STOPWORDS and b not in _STOPWORDS:
             bigrams.append(f"{a} {b}")
+        i += 2
 
     # Candidates: bigrams first (preserve order), then singles not contained within chosen bigrams
     candidates = []

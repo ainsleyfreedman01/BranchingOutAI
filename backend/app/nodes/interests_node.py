@@ -70,6 +70,47 @@ class InterestsNode:
                     # skip here; we'll append canonical tokens below
                     pass
                 else:
+                    # If the item is a run-on phrase with multiple words and no
+                    # clear separators, try the keyword extractor to produce
+                    # reasonable multi-word interests (non-overlapping bigrams).
+                    if len(item.split()) > 1 and not re.search(r",|/|;", item):
+                        try:
+                            # Deterministic spaCy-free splitting for run-on phrases.
+                            cleaned = re.sub(r"[^\w\s-]", " ", item.lower())
+                            toks = [t for t in cleaned.split() if len(t) > 1 and t not in ("and","the","or","of","in","on","for","with","a","an")]
+                            kws = []
+                            j = 0
+                            while j < len(toks) - 1 and len(kws) < 3:
+                                kws.append(f"{toks[j]} {toks[j+1]}".title())
+                                j += 2
+                            # Fill with remaining singles if needed
+                            kidx = 0
+                            while len(kws) < 3 and kidx < len(toks):
+                                candidate = toks[kidx]
+                                if not any(candidate.lower() in _k.lower().split() for _k in kws):
+                                    kws.append(candidate.title())
+                                kidx += 1
+                            if kws:
+                                # Merge trailing small fragments like 'Dev' into previous phrase
+                                proc = []
+                                for k in kws:
+                                    kl = k.lower()
+                                    if kl in ("dev", "development") and proc:
+                                        proc[-1] = f"{proc[-1]} {k.title()}"
+                                        continue
+                                    if kl in ("ops", "ml", "mlops") and proc:
+                                        proc[-1] = f"{proc[-1]} {k.title()}"
+                                        continue
+                                    # Prefer canonical "Arts And Crafts" when original contains 'and'
+                                    if proc and proc[-1].lower() == "arts" and kl == "crafts" and re.search(r"\barts\s+and\s+crafts\b", item, flags=re.I):
+                                        proc[-1] = "Arts And Crafts"
+                                        continue
+                                    proc.append(k)
+                                for k in proc:
+                                    canonical_interests.append(k)
+                                continue
+                        except Exception:
+                            pass
                     canonical_interests.append(item.title())
             if has_devops:
                 canonical_interests.append("DevOps")
@@ -112,6 +153,20 @@ class InterestsNode:
             # Otherwise, just return the split parts in title case without bigram segmentation
             return [s.title() for s in parts] if parts else []
 
+        # Before dedup: expand any combined phrases returned by fallback AI
+        expanded_interests = []
+        for ci in canonical_interests:
+            try:
+                parts = _split_combined_phrase(ci)
+            except Exception:
+                parts = []
+            if parts:
+                for p in parts:
+                    if p:
+                        expanded_interests.append(p)
+            else:
+                expanded_interests.append(ci)
+
         # Deduplicate (preserve order)
         seen = set()
         final_interests = []
@@ -134,7 +189,7 @@ class InterestsNode:
             # Apply on word boundaries
             return re.sub(r"\b(ux|ui|ai|ml|nlp)\b", repl, text, flags=re.I)
 
-        for v in canonical_interests:
+        for v in expanded_interests:
             v = str(v).strip()
             # Normalize common variants early
             v_norm = v
@@ -302,9 +357,15 @@ class InterestsNode:
                 nxt = final_interests[i + 1]
                 if re.fullmatch(r"[A-Za-z]+", cur) and re.fullmatch(r"[A-Za-z]+", nxt):
                     joined_lower = f"{cur.lower()} {nxt.lower()}"
-                    pattern = re.compile(r"\b" + re.escape(cur) + r"\s+" + re.escape(nxt) + r"\b", re.I)
-                    if joined_lower in MULTI_WORD_WHITELIST and pattern.search(user_input):
-                        joined.append(f"{cur} {nxt}".title())
+                    joined_with_and = f"{cur.lower()} and {nxt.lower()}"
+                    # Match either contiguous words or an 'and' conjunction between them
+                    pattern = re.compile(r"\b" + re.escape(cur) + r"(?:\s+and\s+|\s+|\W+)" + re.escape(nxt) + r"\b", re.I)
+                    if (joined_lower in MULTI_WORD_WHITELIST or joined_with_and in MULTI_WORD_WHITELIST) and pattern.search(user_input):
+                        # If whitelist expects an 'and' between words, preserve it
+                        if joined_with_and in MULTI_WORD_WHITELIST:
+                            joined.append(f"{cur} and {nxt}".title())
+                        else:
+                            joined.append(f"{cur} {nxt}".title())
                         i += 2
                         continue
             joined.append(cur)
