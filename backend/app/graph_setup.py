@@ -11,7 +11,15 @@ from app.nodes.industry_node import IndustryNode
 from app.nodes.job_node import JobNode
 from app.nodes.skills_node import SkillsNode
 from app.nodes.agent_node import RouterNode
-from app.langchain_adapter import create_graph_runner
+try:
+    # Prefer LangGraph adapter when available
+    from app.langgraph_adapter import create_graph_runner as create_langgraph_runner
+    _HAS_LANGGRAPH_ADAPTER = True
+except Exception:
+    create_langgraph_runner = None
+    _HAS_LANGGRAPH_ADAPTER = False
+
+from app.langchain_adapter import create_graph_runner as create_langchain_runner
 
 
 class AgentGraph:
@@ -32,8 +40,12 @@ class AgentGraph:
             "job_node": JobNode(),
             "skills_node": SkillsNode(),
         }
-        # Create a default sequential runner over all nodes (used by shim)
-        self._runner = create_graph_runner(list(self._nodes_map.values()) )
+        # Create a default sequential runner over all nodes (used by shim).
+        # Prefer LangGraph adapter if present, else fall back to LangChain adapter.
+        if _HAS_LANGGRAPH_ADAPTER and create_langgraph_runner is not None:
+            self._runner = create_langgraph_runner(list(self._nodes_map.values()))
+        else:
+            self._runner = create_langchain_runner(list(self._nodes_map.values()))
 
     def step(self, state: Dict[str, Any], session_id: str = None):
         """Decide next node via RouterNode and execute it.
