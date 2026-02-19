@@ -97,5 +97,3 @@ PYTHONPATH=backend .venv/bin/pytest -q -m "not integration"
 - Add nodes under `langgraph_agent/nodes/` when you need a new transformation step in the agent flow.
 - Update `requirements-ci.txt` only when CI proves it is necessary to pin or bump packages (aim for minimal, well-justified changes).
 - Keep `config.py` free of secrets; use environment variables and `.env` files for local development.
-
-If you want, I can also generate a short diagram (ASCII or Mermaid) that maps the graph node flow (interests → industries → jobs → skills) and attach it to this README.
