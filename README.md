@@ -1,4 +1,3 @@
-````markdown
 ## Project Structure Overview — Written February 18, 2026
 
 This repository contains a FastAPI backend that orchestrates a graph-based AI agent (LangChain + optional LangGraph adapters) for extracting user interests and suggesting industries, along with a Next.js + Tailwind frontend. Below is a concise walkthrough of the folders and key files, and what each does today.
@@ -182,5 +181,3 @@ PYTHONPATH=backend OPENAI_API_KEY= SUPABASE_URL= SUPABASE_KEY= pytest -q -m "not
 ```
 
 If you don't want to set API keys for test runs that stub LLM/network calls, set them to empty values as shown above.
-
-````
