@@ -3,8 +3,10 @@ import os
 import time
 from collections import defaultdict, deque
 from threading import Lock
+from typing import NamedTuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,6 +17,19 @@ from app.utils.normalization import normalize_state
 # FastAPI instance
 app = FastAPI(title="BranchingOutAI Backend")
 bearer_scheme = HTTPBearer(auto_error=False)
+
+_allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class InMemoryRateLimiter:
@@ -57,9 +72,17 @@ class ChatInput(BaseModel):
     user_input: str = Field(min_length=1, max_length=4000)
 
 
+class AuthenticatedUser(NamedTuple):
+    """Server-verified identity plus the raw token, so downstream Supabase
+    calls can authenticate as this user and satisfy Row Level Security."""
+
+    id: str
+    access_token: str
+
+
 async def authenticated_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> str:
+) -> AuthenticatedUser:
     """Validate the Supabase access token and return its server-trusted user ID."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
@@ -77,12 +100,12 @@ async def authenticated_user(
         user_id = None
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token")
-    return str(user_id)
+    return AuthenticatedUser(id=str(user_id), access_token=credentials.credentials)
 
 
 async def enforce_rate_limit(
     request: Request,
-    user_id: str = Depends(authenticated_user),
+    auth: AuthenticatedUser = Depends(authenticated_user),
 ) -> None:
     """Limit expensive authenticated calls before they reach the AI graph."""
     try:
@@ -93,7 +116,7 @@ async def enforce_rate_limit(
 
     client_host = request.client.host if request.client else "unknown"
     ip_limit = max(limit, int(os.getenv("API_RATE_LIMIT_IP_REQUESTS", str(limit * 2))))
-    user_allowed, retry_after = rate_limiter.allow(f"user:{user_id}", limit, window_seconds)
+    user_allowed, retry_after = rate_limiter.allow(f"user:{auth.id}", limit, window_seconds)
     ip_allowed, ip_retry_after = rate_limiter.allow(f"ip:{client_host}", ip_limit, window_seconds)
     if not user_allowed or not ip_allowed:
         raise HTTPException(
@@ -104,7 +127,7 @@ async def enforce_rate_limit(
 
 # Endpoint to interact with the chatbot
 @app.post("/chatbot/", dependencies=[Depends(enforce_rate_limit)])
-async def chatbot_endpoint(data: ChatInput, user_id: str = Depends(authenticated_user)):
+async def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Handle chatbot interaction.
     
     Args:
@@ -114,7 +137,7 @@ async def chatbot_endpoint(data: ChatInput, user_id: str = Depends(authenticated
         dict: The chatbot's response and updated state.
     """
     # Load previous state from Supabase (or empty dict if new session)
-    state = get_state(data.session_id, user_id=user_id)
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
     
     # Add user input to the state
     state["user_input"] = data.user_input
@@ -138,7 +161,7 @@ async def chatbot_endpoint(data: ChatInput, user_id: str = Depends(authenticated
     response, updated_state = agent_graph.step(state, session_id=None)
     
     # Save updated state to Supabase
-    save_state(data.session_id, updated_state, user_id=user_id)
+    save_state(data.session_id, updated_state, user_id=auth.id, access_token=auth.access_token)
     
     # Normalize state values so frontend receives structured JSON where possible
     normalized_state = normalize_state(updated_state)
@@ -151,16 +174,16 @@ async def chatbot_endpoint(data: ChatInput, user_id: str = Depends(authenticated
 
 
 @app.get("/session/{session_id}", dependencies=[Depends(enforce_rate_limit)])
-async def get_session(session_id: str, user_id: str = Depends(authenticated_user)):
+async def get_session(session_id: str, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Return the saved session state for a given session_id."""
-    state = get_state(session_id, user_id=user_id)
+    state = get_state(session_id, user_id=auth.id, access_token=auth.access_token)
     # ensure returned state is normalized
     normalized = normalize_state(state)
     return {"session_id": session_id, "state": normalized}
 
 
 @app.delete("/account", dependencies=[Depends(enforce_rate_limit)])
-async def delete_account(user_id: str = Depends(authenticated_user)):
+async def delete_account(auth: AuthenticatedUser = Depends(authenticated_user)):
     """Delete the authenticated user's saved data and Supabase account."""
     from app.config import get_supabase_admin
 
@@ -168,8 +191,8 @@ async def delete_account(user_id: str = Depends(authenticated_user)):
     if admin_client is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Account deletion is unavailable")
     try:
-        admin_client.table("session_states").delete().eq("user_id", user_id).execute()
-        admin_client.auth.admin.delete_user(user_id)
+        admin_client.table("session_states").delete().eq("user_id", auth.id).execute()
+        admin_client.auth.admin.delete_user(auth.id)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to delete account") from exc
     return {"status": "deleted"}

@@ -81,8 +81,13 @@ client = OpenAIClient()
 
 
 # ---- Supabase configuration (lazy) ----
-def get_supabase() -> Optional[object]:
+def get_supabase(access_token: Optional[str] = None) -> Optional[object]:
     """Create and return a Supabase client if env vars are set; else None.
+
+    When `access_token` (the caller's Supabase auth JWT) is provided, the
+    client's PostgREST requests are authenticated as that user instead of the
+    anon role, so Row Level Security policies (which check `auth.uid()`) see
+    the real user and allow their own rows through.
 
     Avoids raising during module import so the app can boot without Supabase.
     """
@@ -92,7 +97,10 @@ def get_supabase() -> Optional[object]:
     key = os.getenv("SUPABASE_KEY")
     if not url or not key:
         return None
-    return create_client(url, key)
+    client = create_client(url, key)
+    if access_token:
+        client.postgrest.auth(access_token)
+    return client
 
 
 def get_supabase_admin() -> Optional[object]:

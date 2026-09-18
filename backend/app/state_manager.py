@@ -19,12 +19,16 @@ def _memory_key(session_id: str, user_id: str | None) -> str:
     return f"{user_id}:{session_id}" if user_id is not None else session_id
 
 
-def _supabase_client():
-    """Get Supabase client or None if not configured."""
-    return get_supabase()
+def _supabase_client(access_token: str | None = None):
+    """Get Supabase client or None if not configured.
+
+    Passing the caller's `access_token` authenticates PostgREST requests as
+    that user, which Row Level Security policies require to allow access.
+    """
+    return get_supabase(access_token=access_token)
 
 
-def get_state(session_id: str, user_id: str | None = None) -> Dict[str, Any]:
+def get_state(session_id: str, user_id: str | None = None, access_token: str | None = None) -> Dict[str, Any]:
     """Get state from Supabase or in-memory dict.
     
     Args:
@@ -33,7 +37,7 @@ def get_state(session_id: str, user_id: str | None = None) -> Dict[str, Any]:
     Returns:
         dict: The session state.
     """
-    sb = _supabase_client()
+    sb = _supabase_client(access_token)
     if sb is None:
         return _memory_store.get(_memory_key(session_id, user_id), {})
     try:
@@ -65,7 +69,7 @@ def get_state(session_id: str, user_id: str | None = None) -> Dict[str, Any]:
         return _memory_store.get(_memory_key(session_id, user_id), {})
 
 
-def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = None) -> None:
+def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = None, access_token: str | None = None) -> None:
     """Save state to Supabase or in-memory dict.
     
     Args:
@@ -75,7 +79,7 @@ def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = Non
     # Normalize state (parse JSON strings into structures) before saving.
     normalized = normalize_state(state)
 
-    sb = _supabase_client()
+    sb = _supabase_client(access_token)
     if sb is None:
         # persist to in-memory store; attach user_id if present
         entry = dict(normalized)
@@ -85,13 +89,12 @@ def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = Non
         return
     try:
         if user_id is not None:
-            query = sb.table("session_states").select("*").eq("session_id", session_id).eq("user_id", user_id)
-            existing = getattr(query.execute(), "data", None)
-            payload = {"state": normalized, "user_id": user_id}
-            if isinstance(existing, list) and existing or isinstance(existing, dict) and existing.get("state") is not None:
-                sb.table("session_states").update(payload).eq("session_id", session_id).eq("user_id", user_id).execute()
-            else:
-                sb.table("session_states").insert({"session_id": session_id, **payload}).execute()
+            # Atomic upsert keyed on the existing unique constraint on session_id
+            # (the (user_id, session_id) index is partial, which PostgREST's
+            # on_conflict target can't match), avoiding the select-then-
+            # update/insert race of the generic path below.
+            payload = {"session_id": session_id, "state": normalized, "user_id": user_id}
+            sb.table("session_states").upsert(payload, on_conflict="session_id").execute()
             return
         # Prefer a single upsert call when supported by the client to avoid
         # races and multiple round-trips. Build an insert payload and only

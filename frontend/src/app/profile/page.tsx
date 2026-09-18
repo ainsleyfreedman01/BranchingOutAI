@@ -14,6 +14,8 @@ function ProfileContent() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -21,12 +23,37 @@ function ProfileContent() {
 
   useEffect(() => {
     if (!loading && !user) router.replace("/");
-    if (user) setEmail(user.email ?? "");
+    if (user) {
+      setEmail(user.email ?? "");
+      setFirstName((user.user_metadata?.first_name as string | undefined) ?? "");
+      setLastName((user.user_metadata?.last_name as string | undefined) ?? "");
+    }
   }, [loading, user, router]);
 
   function clearMessages() {
     setStatusMessage(null);
     setErrorMessage(null);
+  }
+
+  async function updateName() {
+    clearMessages();
+    const trimmedFirst = firstName.trim();
+    const trimmedLast = lastName.trim();
+    if (!trimmedFirst && !trimmedLast) {
+      setErrorMessage("Enter a first or last name.");
+      return;
+    }
+    setSaving(true);
+    const { error } = await supabase.auth.updateUser({
+      data: {
+        first_name: trimmedFirst,
+        last_name: trimmedLast,
+        full_name: `${trimmedFirst} ${trimmedLast}`.trim(),
+      },
+    });
+    setSaving(false);
+    if (error) setErrorMessage(error.message);
+    else setStatusMessage("Your name has been updated.");
   }
 
   async function updateEmail() {
@@ -111,6 +138,16 @@ function ProfileContent() {
         )}
 
         <div className="space-y-6">
+          <section className="rounded-2xl border border-primary-100 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-primary-950">Name</h2>
+            <p className="mt-1 text-sm text-neutral-500">Used to personalize your experience across the app.</p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <input aria-label="First name" type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" className="min-w-0 rounded-lg border border-neutral-300 bg-neutral-50 px-4 py-2.5 text-sm outline-none focus:border-primary-600 focus:ring-2 focus:ring-primary-100" />
+              <input aria-label="Last name" type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name" className="min-w-0 rounded-lg border border-neutral-300 bg-neutral-50 px-4 py-2.5 text-sm outline-none focus:border-primary-600 focus:ring-2 focus:ring-primary-100" />
+            </div>
+            <button onClick={updateName} disabled={saving} className="mt-3 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-primary-700 disabled:opacity-60">Update name</button>
+          </section>
+
           <section className="rounded-2xl border border-primary-100 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-primary-950">Email address</h2>
             <p className="mt-1 text-sm text-neutral-500">Changing your email requires confirmation at the new address.</p>
