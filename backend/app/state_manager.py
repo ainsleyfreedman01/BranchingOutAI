@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 _memory_store: Dict[str, Dict[str, Any]] = {}
 
 
+def _memory_key(session_id: str, user_id: str | None) -> str:
+    return f"{user_id}:{session_id}" if user_id is not None else session_id
+
+
 def _supabase_client():
     """Get Supabase client or None if not configured."""
     return get_supabase()
@@ -31,7 +35,7 @@ def get_state(session_id: str, user_id: str | None = None) -> Dict[str, Any]:
     """
     sb = _supabase_client()
     if sb is None:
-        return _memory_store.get(session_id, {})
+        return _memory_store.get(_memory_key(session_id, user_id), {})
     try:
         # Avoid using `.single()` which raises when there are 0 rows.
         # If a user_id is provided, prefer user-scoped row; if not found, fall back
@@ -44,7 +48,7 @@ def get_state(session_id: str, user_id: str | None = None) -> Dict[str, Any]:
                 return data[0].get("state", {}) or {}
             if isinstance(data, dict) and data.get("state") is not None:
                 return data.get("state") or {}
-            # fallback to session-only row
+            return {}
         query = sb.table("session_states").select("*").eq("session_id", session_id)
         res = query.execute()
         data = getattr(res, "data", None)
@@ -58,7 +62,7 @@ def get_state(session_id: str, user_id: str | None = None) -> Dict[str, Any]:
     except Exception:
         # If Supabase is misconfigured, log the error and fall back to memory
         logger.exception("get_state: Supabase query failed for session_id=%s", session_id)
-        return _memory_store.get(session_id, {})
+        return _memory_store.get(_memory_key(session_id, user_id), {})
 
 
 def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = None) -> None:
@@ -74,14 +78,21 @@ def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = Non
     sb = _supabase_client()
     if sb is None:
         # persist to in-memory store; attach user_id if present
+        entry = dict(normalized)
         if user_id is not None:
-            entry = dict(normalized)
             entry.setdefault("user_id", user_id)
-            _memory_store[session_id] = entry
-        else:
-            _memory_store[session_id] = normalized
+        _memory_store[_memory_key(session_id, user_id)] = entry
         return
     try:
+        if user_id is not None:
+            query = sb.table("session_states").select("*").eq("session_id", session_id).eq("user_id", user_id)
+            existing = getattr(query.execute(), "data", None)
+            payload = {"state": normalized, "user_id": user_id}
+            if isinstance(existing, list) and existing or isinstance(existing, dict) and existing.get("state") is not None:
+                sb.table("session_states").update(payload).eq("session_id", session_id).eq("user_id", user_id).execute()
+            else:
+                sb.table("session_states").insert({"session_id": session_id, **payload}).execute()
+            return
         # Prefer a single upsert call when supported by the client to avoid
         # races and multiple round-trips. Build an insert payload and only
         # include `user_id` when provided.
@@ -119,6 +130,6 @@ def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = Non
         if user_id is not None:
             entry = dict(normalized)
             entry.setdefault("user_id", user_id)
-            _memory_store[session_id] = entry
+            _memory_store[_memory_key(session_id, user_id)] = entry
         else:
-            _memory_store[session_id] = normalized
+            _memory_store[_memory_key(session_id, user_id)] = normalized

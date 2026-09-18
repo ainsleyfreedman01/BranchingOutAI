@@ -55,16 +55,16 @@ const features = [
 
 export default function Features() {
   return (
-    <section id="features" className="bg-[#f0fff4] py-20">
+    <section id="features" className="bg-primary-50 py-20">
       <div className="mx-auto max-w-6xl px-6">
         <div className="mb-12 text-center">
-          <span className="inline-block rounded-full bg-[#dcfce7] px-3 py-1 text-xs font-semibold uppercase tracking-widest text-[#15803d]">
+          <span className="inline-block rounded-full bg-primary-100 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-primary-700">
             How it works
           </span>
-          <h2 className="mt-3 text-3xl font-bold text-[#14532d]">
+          <h2 className="mt-3 text-3xl font-bold text-primary-900">
             Everything you need to branch out
           </h2>
-          <p className="mt-3 text-base text-[#4b5563]">
+          <p className="mt-3 text-base text-neutral-600">
             Career growth shouldn&apos;t feel like a maze. We make it feel like a walk through the woods.
           </p>
         </div>
@@ -73,13 +73,13 @@ export default function Features() {
           {features.map((f) => (
             <div
               key={f.title}
-              className="rounded-2xl border border-[#bbf7d0] bg-white p-6 shadow-sm transition hover:shadow-md"
+              className="rounded-2xl border border-primary-200 bg-white p-6 shadow-sm transition hover:shadow-md"
             >
-              <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-lg bg-[#dcfce7]">
+              <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-lg bg-primary-100">
                 {icons[f.iconKey]}
               </div>
-              <h3 className="font-semibold text-[#14532d]">{f.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-[#4b5563]">{f.desc}</p>
+              <h3 className="font-semibold text-primary-900">{f.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-neutral-600">{f.desc}</p>
             </div>
           ))}
         </div>

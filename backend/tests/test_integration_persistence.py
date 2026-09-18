@@ -1,12 +1,21 @@
 from fastapi.testclient import TestClient
-from app.main import app
-from app.state_manager import get_state
-import json
+from app.main import app, authenticated_user
 import pytest
 
 
 @pytest.mark.integration
-def test_post_and_get_session_roundtrip():
+def test_post_and_get_session_roundtrip(monkeypatch):
+    app.dependency_overrides[authenticated_user] = lambda: "integration-test-user"
+    saved = {}
+
+    def fake_get_state(session_id, user_id=None):
+        return saved.get((user_id, session_id), {})
+
+    def fake_save_state(session_id, state, user_id=None):
+        saved[(user_id, session_id)] = state
+
+    monkeypatch.setattr("app.main.get_state", fake_get_state)
+    monkeypatch.setattr("app.main.save_state", fake_save_state)
     client = TestClient(app)
     sid = "int-test-1"
 
@@ -25,3 +34,4 @@ def test_post_and_get_session_roundtrip():
     # ensure returned state includes normalized industries list
     assert "industries" in data["state"]
     assert isinstance(data["state"]["industries"], list)
+    app.dependency_overrides.clear()

@@ -1,16 +1,21 @@
 "use client";
 
 import React from "react";
+import { useRouter } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 
 type Props = {
+  user: User | null;
   onCTAClick: () => void;
 };
 
-export default function CTA({ onCTAClick }: Props) {
+export default function CTA({ user, onCTAClick }: Props) {
+  const router = useRouter();
+
   return (
     <section className="py-20">
       <div className="mx-auto max-w-3xl px-6 text-center">
-        <div className="rounded-3xl border border-[#bbf7d0] bg-gradient-to-br from-[#f0fff4] to-[#dcfce7] p-12 shadow-sm">
+        <div className="rounded-3xl border border-primary-200 bg-gradient-to-br from-primary-50 to-primary-100 p-12 shadow-sm">
           {/* Decorative tree */}
           <div className="mb-6 flex justify-center">
             <svg width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
@@ -21,21 +26,34 @@ export default function CTA({ onCTAClick }: Props) {
               <ellipse cx="28" cy="14" rx="9" ry="9" fill="#bbf7d0" />
             </svg>
           </div>
-          <h2 className="text-3xl font-bold text-[#14532d]">
+          <h2 className="text-3xl font-bold text-primary-900">
             Ready to grow?
           </h2>
-          <p className="mt-3 text-base text-[#374151]">
-            Join BranchingOutAI and start building a career map that's as unique as you are.
+          <p className="mt-3 text-base text-neutral-700">
+            {user
+              ? "Pick up where you left off and keep building your career tree."
+              : "Join BranchingOutAI and start building a career map that\u2019s as unique as you are."}
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <button
-              onClick={onCTAClick}
-              className="cursor-pointer rounded-full bg-[#16a34a] px-8 py-3 text-sm font-semibold text-white shadow-md transition hover:bg-[#15803d]"
-            >
-              Create your free account
-            </button>
+            {user ? (
+              <button
+                onClick={() => router.push("/graph")}
+                className="cursor-pointer rounded-full bg-primary-600 px-8 py-3 text-sm font-semibold text-white shadow-md transition hover:bg-primary-700"
+              >
+                Go to my graph →
+              </button>
+            ) : (
+              <button
+                onClick={onCTAClick}
+                className="cursor-pointer rounded-full bg-primary-600 px-8 py-3 text-sm font-semibold text-white shadow-md transition hover:bg-primary-700"
+              >
+                Create your free account
+              </button>
+            )}
           </div>
-          <p className="mt-4 text-xs text-[#6b7280]">No credit card required. Free to start.</p>
+          {!user && (
+            <p className="mt-4 text-xs text-neutral-500">No credit card required. Free to start.</p>
+          )}
         </div>
       </div>
     </section>
