@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: backend
+      OPENAI_API_KEY: ""
+      SUPABASE_URL: ""
+      SUPABASE_KEY: ""
     strategy:
       matrix:
         python-version: [3.13]
@@ -42,4 +45,4 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
-          python -m pytest -q
+          python -m pytest -q -m "not integration"

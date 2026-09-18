@@ -1,17 +1,19 @@
 from fastapi.testclient import TestClient
-from app.main import app, authenticated_user
+from app.main import AuthenticatedUser, app, authenticated_user
 import pytest
 
 
 @pytest.mark.integration
 def test_post_and_get_session_roundtrip(monkeypatch):
-    app.dependency_overrides[authenticated_user] = lambda: "integration-test-user"
+    app.dependency_overrides[authenticated_user] = lambda: AuthenticatedUser(
+        id="integration-test-user", access_token="test-access-token"
+    )
     saved = {}
 
-    def fake_get_state(session_id, user_id=None):
+    def fake_get_state(session_id, user_id=None, access_token=None):
         return saved.get((user_id, session_id), {})
 
-    def fake_save_state(session_id, state, user_id=None):
+    def fake_save_state(session_id, state, user_id=None, access_token=None):
         saved[(user_id, session_id)] = state
 
     monkeypatch.setattr("app.main.get_state", fake_get_state)

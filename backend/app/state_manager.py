@@ -28,6 +28,12 @@ def _supabase_client(access_token: str | None = None):
     return get_supabase(access_token=access_token)
 
 
+def _get_supabase_client(access_token: str | None):
+    if access_token is None:
+        return _supabase_client()
+    return _supabase_client(access_token)
+
+
 def get_state(session_id: str, user_id: str | None = None, access_token: str | None = None) -> Dict[str, Any]:
     """Get state from Supabase or in-memory dict.
     
@@ -37,7 +43,7 @@ def get_state(session_id: str, user_id: str | None = None, access_token: str | N
     Returns:
         dict: The session state.
     """
-    sb = _supabase_client(access_token)
+    sb = _get_supabase_client(access_token)
     if sb is None:
         return _memory_store.get(_memory_key(session_id, user_id), {})
     try:
@@ -79,7 +85,7 @@ def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = Non
     # Normalize state (parse JSON strings into structures) before saving.
     normalized = normalize_state(state)
 
-    sb = _supabase_client(access_token)
+    sb = _get_supabase_client(access_token)
     if sb is None:
         # persist to in-memory store; attach user_id if present
         entry = dict(normalized)
