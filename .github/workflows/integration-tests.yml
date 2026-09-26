@@ -2,11 +2,13 @@ name: Integration tests
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   integration:
-    # Only run when the necessary secrets are set in the repository
-    if: ${{ secrets.OPENAI_API_KEY != '' && secrets.SUPABASE_URL != '' && secrets.SUPABASE_KEY != '' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
