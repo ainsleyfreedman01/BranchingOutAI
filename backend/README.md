@@ -101,7 +101,12 @@ PYTHONPATH=backend .venv/bin/pytest -q -m "not integration"
 
 ## Production rate limits
 
+- Set `APP_ENV=production`; startup then requires `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and one or more exact HTTPS `CORS_ALLOWED_ORIGINS`. Localhost and wildcard CORS entries are rejected.
 - Defaults: 30 requests per authenticated user per 60 seconds and 60 per client IP per 60 seconds.
 - Configure with `API_RATE_LIMIT_REQUESTS`, `API_RATE_LIMIT_IP_REQUESTS`, and `API_RATE_LIMIT_WINDOW_SECONDS` (maximum accepted window: 24 hours).
 - Set Uvicorn's `FORWARDED_ALLOW_IPS` to the exact trusted proxy addresses in front of the service. Do not trust client-supplied forwarding headers from untrusted peers.
+- JSON request bodies are capped at 64 KiB before route handling; `user_input` is separately limited to 4,000 characters.
 - Store `SUPABASE_SERVICE_ROLE_KEY` only in the backend secret store. The limiter sends keyed HMACs of user/IP identifiers to the database, not raw identifiers.
+- Terminate TLS at the hosting platform or trusted reverse proxy. The API emits HSTS only when it sees an HTTPS request; the frontend emits HSTS in production builds.
+- Apply `20260926_harden_session_state_rls.sql` and `20261001_add_shared_api_rate_limits.sql` in order. Verify the RPC and RLS behavior in a staging Supabase project before production rollout.
+- Configure bot/CAPTCHA protection and auth rate limits in Supabase Auth, and place a WAF/API gateway in front of the app if defending against distributed account/IP rotation. These require hosting/provider configuration and are not enabled by this repository.

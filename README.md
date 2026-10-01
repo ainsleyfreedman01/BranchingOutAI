@@ -120,6 +120,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 NEXT_PUBLIC_API_URL=http://localhost:8000
 CORS_ALLOWED_ORIGINS=http://localhost:3000
 OPENAI_TIMEOUT_SECONDS=30
+APP_ENV=development
 API_RATE_LIMIT_REQUESTS=30
 API_RATE_LIMIT_IP_REQUESTS=60
 API_RATE_LIMIT_WINDOW_SECONDS=60
@@ -154,6 +155,9 @@ Key points:
 - Set `SUPABASE_URL` and `SUPABASE_KEY` to the project URL and anon key. Set `SUPABASE_SERVICE_ROLE_KEY` separately for backend-only account deletion.
 - Apply the SQL migrations in order, including `backend/migrations/20260926_harden_session_state_rls.sql` and `backend/migrations/20261001_add_shared_api_rate_limits.sql`, before deploying.
 - Rate limits are shared through Postgres and survive API restarts: 30 requests per user and 60 per client IP per minute by default. Configure Uvicorn `FORWARDED_ALLOW_IPS` with trusted proxy addresses for accurate IP limits.
+- For production, set `APP_ENV=production`. Backend startup requires Supabase URL/keys and exact HTTPS CORS origins; it rejects localhost or wildcard CORS. The Next.js frontend adds HSTS in production builds.
+- Configure TLS at the host/proxy and set `FORWARDED_ALLOW_IPS` to only its trusted addresses. Apply both the session RLS and shared-rate-limit migrations, then verify them against a staging Supabase project.
+- CAPTCHA/bot checks and WAF rules need provider-side configuration. No CAPTCHA provider is wired in because it requires provider setup and client/secret keys; per-user/IP quotas do not fully stop distributed account and IP rotation.
 - There's a convenience endpoint to inspect saved state:
 `GET /session/{session_id}` — returns the normalized saved state for debug.
 

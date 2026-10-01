@@ -49,7 +49,9 @@ The current Next.js graph page is a local interactive canvas and does not call `
 - The service-role key is backend-only and used for account deletion. The RLS migration adds owner policies plus a restrictive owner guard, preventing older permissive policies from widening access.
 - Raw user input is included in prompts sent to OpenAI; disclose this in product privacy terms and avoid logging prompt bodies or access tokens.
 - `/health` is a liveness endpoint. `/ready` checks Supabase table reachability. OpenAI is not required for readiness because the interest flow has deterministic fallbacks.
+- `APP_ENV=production` requires Supabase URL/keys and exact HTTPS CORS origins at startup. The backend and production frontend set HSTS only on HTTPS/production responses.
 - Rate limiting uses an atomic Postgres RPC, so quotas are shared across workers and survive API restarts. User and client-IP identifiers are HMACed before storage; the database prunes old buckets opportunistically. Limiting fails closed with HTTP 503 if the RPC is unavailable.
+- The client-IP quota runs before bearer-token verification, which also throttles invalid-token attempts. JSON bodies are capped at 64 KiB before route handling; chat text is limited to 4,000 characters.
 - Session state is replaced as a JSON document; concurrent updates to one session are last-write-wins. A database error is logged and surfaced as 503; authenticated requests do not fall back to memory.
 
 ## State schema (typical keys)
@@ -110,6 +112,7 @@ curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-T
 - Apply migrations in order, including `20260926_harden_session_state_rls.sql` and `20261001_add_shared_api_rate_limits.sql`, before deploying the updated backend.
 - Set `CORS_ALLOWED_ORIGINS` to the deployed frontend origin and keep `SUPABASE_SERVICE_ROLE_KEY` server-side only.
 - Set `FORWARDED_ALLOW_IPS` to the exact trusted reverse-proxy addresses so Uvicorn can safely resolve client IPs for the secondary IP quota. Do not trust arbitrary forwarded headers.
+- CAPTCHA/bot protection, signup throttles, TLS termination, and WAF rules must be configured in Supabase Auth and the hosting edge; they are not represented by local app code.
 - `OPENAI_TIMEOUT_SECONDS` controls model request timeouts (default 30 seconds). Rate defaults are 30 requests/user/minute and 60 requests/IP/minute; use `API_RATE_LIMIT_REQUESTS`, `API_RATE_LIMIT_IP_REQUESTS`, and `API_RATE_LIMIT_WINDOW_SECONDS` to tune them.
 
 ---

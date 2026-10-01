@@ -1,6 +1,8 @@
 # backend/app/main.py
 import os
+from contextlib import asynccontextmanager
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +15,49 @@ from app.rate_limiter import RateLimitUnavailable, SupabaseRateLimiter
 from app.state_manager import StatePersistenceUnavailable, get_state, save_state
 from app.utils.normalization import normalize_state
 
+def validate_runtime_settings() -> None:
+    """Reject unsafe or incomplete configuration in production mode."""
+    app_env = os.getenv("APP_ENV", "development").strip().lower()
+    if app_env not in {"development", "test", "production"}:
+        raise RuntimeError("APP_ENV must be development, test, or production")
+    if app_env != "production":
+        return
+
+    required = ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "CORS_ALLOWED_ORIGINS")
+    missing = [name for name in required if not os.getenv(name, "").strip()]
+    if missing:
+        raise RuntimeError(f"Missing required production settings: {', '.join(missing)}")
+
+    supabase_url = urlsplit(os.environ["SUPABASE_URL"])
+    if supabase_url.scheme != "https" or not supabase_url.hostname:
+        raise RuntimeError("SUPABASE_URL must use HTTPS in production")
+
+    origins = [origin.strip() for origin in os.environ["CORS_ALLOWED_ORIGINS"].split(",") if origin.strip()]
+    for origin in origins:
+        parsed = urlsplit(origin)
+        if (
+            origin == "*"
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.hostname.lower() == "localhost"
+            or parsed.hostname.lower().endswith(".localhost")
+        ):
+            raise RuntimeError("CORS_ALLOWED_ORIGINS must contain only exact HTTPS frontend origins")
+
+
+@asynccontextmanager
+async def lifespan(application):
+    validate_runtime_settings()
+    yield
+
+
 # FastAPI instance
-app = FastAPI(title="BranchingOutAI Backend")
+app = FastAPI(title="BranchingOutAI Backend", lifespan=lifespan)
 bearer_scheme = HTTPBearer(auto_error=False)
 
 _allowed_origins = [
@@ -41,10 +84,66 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if os.getenv("APP_ENV", "development").strip().lower() == "production" and request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+class RequestBodyLimitMiddleware:
+    def __init__(self, app, max_bytes: int = 64 * 1024):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_bytes:
+                    await JSONResponse(
+                        status_code=413,
+                        content={"detail": "Request body is too large"},
+                    )(scope, receive, send)
+                    return
+            except ValueError:
+                await JSONResponse(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    content={"detail": "Invalid Content-Length"},
+                )(scope, receive, send)
+                return
+
+        bytes_received = 0
+
+        async def receive_limited():
+            nonlocal bytes_received
+            message = await receive()
+            if message["type"] == "http.request":
+                bytes_received += len(message.get("body", b""))
+                if bytes_received > self.max_bytes:
+                    raise RequestBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, receive_limited, send)
+        except RequestBodyTooLarge:
+            await JSONResponse(
+                status_code=413,
+                content={"detail": "Request body is too large"},
+            )(scope, receive, send)
+
+
+class RequestBodyTooLarge(Exception):
+    pass
+
+
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 @app.exception_handler(StatePersistenceUnavailable)
@@ -91,11 +190,7 @@ def authenticated_user(
     return AuthenticatedUser(id=str(user_id), access_token=credentials.credentials)
 
 
-def enforce_rate_limit(
-    request: Request,
-    auth: AuthenticatedUser = Depends(authenticated_user),
-) -> None:
-    """Limit expensive authenticated calls before they reach the AI graph."""
+def _rate_limit_settings() -> tuple[int, int, int]:
     try:
         limit = max(1, int(os.getenv("API_RATE_LIMIT_REQUESTS", "30")))
         window_seconds = max(1, int(os.getenv("API_RATE_LIMIT_WINDOW_SECONDS", "60")))
@@ -104,25 +199,39 @@ def enforce_rate_limit(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting is unavailable") from exc
     if limit > 100000 or ip_limit > 100000 or window_seconds > 86400:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate-limit settings are out of range")
+    return limit, window_seconds, ip_limit
 
-    client_host = request.client.host if request.client else "unknown"
+
+def _check_rate_limit(key: str, limit: int, window_seconds: int) -> None:
     try:
-        user_allowed, retry_after = rate_limiter.allow(f"user:{auth.id}", limit, window_seconds)
-        ip_allowed, ip_retry_after = rate_limiter.allow(f"ip:{client_host}", ip_limit, window_seconds)
+        allowed, retry_after = rate_limiter.allow(key, limit, window_seconds)
     except RateLimitUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Rate limiting is unavailable",
         ) from exc
-    if not user_allowed or not ip_allowed:
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many requests. Please try again later.",
-            headers={"Retry-After": str(max(retry_after, ip_retry_after))},
+            headers={"Retry-After": str(retry_after)},
         )
 
+
+def enforce_ip_rate_limit(request: Request) -> None:
+    """Apply the shared client-IP quota before bearer-token verification."""
+    _, window_seconds, ip_limit = _rate_limit_settings()
+    client_host = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"ip:{client_host}", ip_limit, window_seconds)
+
+
+def enforce_rate_limit(auth: AuthenticatedUser = Depends(authenticated_user)) -> None:
+    """Apply the shared authenticated-user quota before expensive operations."""
+    limit, window_seconds, _ = _rate_limit_settings()
+    _check_rate_limit(f"user:{auth.id}", limit, window_seconds)
+
 # Endpoint to interact with the chatbot
-@app.post("/chatbot/", dependencies=[Depends(enforce_rate_limit)])
+@app.post("/chatbot/", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
 def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Handle chatbot interaction.
     
@@ -169,7 +278,7 @@ def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenti
     }
 
 
-@app.get("/session/{session_id}", dependencies=[Depends(enforce_rate_limit)])
+@app.get("/session/{session_id}", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
 def get_session(session_id: str, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Return the saved session state for a given session_id."""
     state = get_state(session_id, user_id=auth.id, access_token=auth.access_token)
@@ -178,7 +287,7 @@ def get_session(session_id: str, auth: AuthenticatedUser = Depends(authenticated
     return {"session_id": session_id, "state": normalized}
 
 
-@app.delete("/account", dependencies=[Depends(enforce_rate_limit)])
+@app.delete("/account", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
 def delete_account(auth: AuthenticatedUser = Depends(authenticated_user)):
     """Delete the authenticated user's saved data and Supabase account."""
     from app.config import get_supabase_admin

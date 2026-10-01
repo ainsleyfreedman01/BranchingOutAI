@@ -1,5 +1,6 @@
 import os
 from threading import Lock
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -16,7 +17,7 @@ except Exception:  # pragma: no cover - optional dependency at import
     Client = None  # type: ignore
 
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 
 # ---- OpenAI configuration ----
