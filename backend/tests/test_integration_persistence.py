@@ -8,6 +8,7 @@ def test_post_and_get_session_roundtrip(monkeypatch):
     app.dependency_overrides[authenticated_user] = lambda: AuthenticatedUser(
         id="integration-test-user", access_token="test-access-token"
     )
+    monkeypatch.setattr("app.main.rate_limiter.allow", lambda *args: (True, 0))
     saved = {}
 
     def fake_get_state(session_id, user_id=None, access_token=None):

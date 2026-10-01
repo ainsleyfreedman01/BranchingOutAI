@@ -23,6 +23,9 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _openai_client = None
 _openai_client_lock = Lock()
+_supabase_admin_client = None
+_supabase_admin_client_config = None
+_supabase_admin_client_lock = Lock()
 
 
 def _get_openai_sdk_client(OpenAIClass):
@@ -123,10 +126,17 @@ def get_supabase(access_token: Optional[str] = None) -> Optional[object]:
 
 def get_supabase_admin() -> Optional[object]:
     """Create a service-role client for server-only administrative actions."""
+    global _supabase_admin_client, _supabase_admin_client_config
     if create_client is None:
         return None
     url = os.getenv("SUPABASE_URL")
     service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not service_role_key:
         return None
-    return create_client(url, service_role_key)
+    client_config = (url, service_role_key)
+    if _supabase_admin_client is None or _supabase_admin_client_config != client_config:
+        with _supabase_admin_client_lock:
+            if _supabase_admin_client is None or _supabase_admin_client_config != client_config:
+                _supabase_admin_client = create_client(url, service_role_key)
+                _supabase_admin_client_config = client_config
+    return _supabase_admin_client

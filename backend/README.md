@@ -90,10 +90,18 @@ PYTHONPATH=backend .venv/bin/pytest -q -m "not integration"
 - Authentication and persistence:
   - `/chatbot/`, `/session/{session_id}`, and `/account` require a Supabase bearer token.
   - Session IDs are globally unique. RLS enforces that callers can access only rows whose `user_id` matches their Supabase identity.
-  - Apply all SQL migrations, including `20260926_harden_session_state_rls.sql`, before deploying this backend.
+  - API quotas are stored in Supabase and checked atomically, so they are shared across backend workers and survive restarts. If the limiter database/RPC is unavailable, protected endpoints return `503` rather than skipping limits.
+  - Apply all SQL migrations, including `20260926_harden_session_state_rls.sql` and `20261001_add_shared_api_rate_limits.sql`, before deploying this backend.
 
 ## When to modify these files
 
 - Add nodes under `app/nodes/` when you need a new transformation step in the agent flow.
 - Update `requirements-ci.txt` only when CI proves it is necessary to pin or bump packages (aim for minimal, well-justified changes).
 - Keep `config.py` free of secrets; use environment variables and `.env` files for local development.
+
+## Production rate limits
+
+- Defaults: 30 requests per authenticated user per 60 seconds and 60 per client IP per 60 seconds.
+- Configure with `API_RATE_LIMIT_REQUESTS`, `API_RATE_LIMIT_IP_REQUESTS`, and `API_RATE_LIMIT_WINDOW_SECONDS` (maximum accepted window: 24 hours).
+- Set Uvicorn's `FORWARDED_ALLOW_IPS` to the exact trusted proxy addresses in front of the service. Do not trust client-supplied forwarding headers from untrusted peers.
+- Store `SUPABASE_SERVICE_ROLE_KEY` only in the backend secret store. The limiter sends keyed HMACs of user/IP identifiers to the database, not raw identifiers.

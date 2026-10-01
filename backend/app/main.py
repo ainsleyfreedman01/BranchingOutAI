@@ -1,8 +1,5 @@
 # backend/app/main.py
 import os
-import time
-from collections import deque
-from threading import Lock
 from typing import NamedTuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -12,6 +9,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from app.graph_setup import agent_graph
+from app.rate_limiter import RateLimitUnavailable, SupabaseRateLimiter
 from app.state_manager import StatePersistenceUnavailable, get_state, save_state
 from app.utils.normalization import normalize_state
 
@@ -33,35 +31,7 @@ app.add_middleware(
 )
 
 
-class InMemoryRateLimiter:
-    def __init__(self):
-        self._requests: dict[str, deque[float]] = {}
-        self._lock = Lock()
-        self._next_cleanup = 0.0
-
-    def allow(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
-        now = time.monotonic()
-        cutoff = now - window_seconds
-        with self._lock:
-            if now >= self._next_cleanup:
-                for tracked_key, tracked_times in list(self._requests.items()):
-                    while tracked_times and tracked_times[0] <= cutoff:
-                        tracked_times.popleft()
-                    if not tracked_times:
-                        del self._requests[tracked_key]
-                self._next_cleanup = now + min(window_seconds, 60)
-
-            timestamps = self._requests.setdefault(key, deque())
-            while timestamps and timestamps[0] <= cutoff:
-                timestamps.popleft()
-            if len(timestamps) >= limit:
-                retry_after = max(1, int(timestamps[0] + window_seconds - now))
-                return False, retry_after
-            timestamps.append(now)
-            return True, 0
-
-
-rate_limiter = InMemoryRateLimiter()
+rate_limiter = SupabaseRateLimiter()
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -121,7 +91,7 @@ def authenticated_user(
     return AuthenticatedUser(id=str(user_id), access_token=credentials.credentials)
 
 
-async def enforce_rate_limit(
+def enforce_rate_limit(
     request: Request,
     auth: AuthenticatedUser = Depends(authenticated_user),
 ) -> None:
@@ -132,10 +102,18 @@ async def enforce_rate_limit(
         ip_limit = max(limit, int(os.getenv("API_RATE_LIMIT_IP_REQUESTS", str(limit * 2))))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting is unavailable") from exc
+    if limit > 100000 or ip_limit > 100000 or window_seconds > 86400:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate-limit settings are out of range")
 
     client_host = request.client.host if request.client else "unknown"
-    user_allowed, retry_after = rate_limiter.allow(f"user:{auth.id}", limit, window_seconds)
-    ip_allowed, ip_retry_after = rate_limiter.allow(f"ip:{client_host}", ip_limit, window_seconds)
+    try:
+        user_allowed, retry_after = rate_limiter.allow(f"user:{auth.id}", limit, window_seconds)
+        ip_allowed, ip_retry_after = rate_limiter.allow(f"ip:{client_host}", ip_limit, window_seconds)
+    except RateLimitUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiting is unavailable",
+        ) from exc
     if not user_allowed or not ip_allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -223,14 +201,14 @@ async def health():
 
 @app.get("/ready")
 def ready():
-    """Check that the configured Supabase database endpoint is reachable."""
-    from app.config import get_supabase
+    """Check that the service-role database endpoint and limiter table are ready."""
+    from app.config import get_supabase_admin
 
-    client = get_supabase()
+    client = get_supabase_admin()
     if client is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is unavailable")
     try:
-        client.table("session_states").select("session_id").limit(1).execute()
+        client.table("api_rate_limits").select("rate_key").limit(1).execute()
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is unavailable") from exc
     return {"status": "ready"}
