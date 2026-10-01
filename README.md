@@ -1,4 +1,4 @@
-## Project Structure Overview — Written February 18, 2026
+## Project Structure Overview — Updated September 26, 2026
 
 This repository contains a FastAPI backend that orchestrates a graph-based AI agent (LangChain + optional LangGraph adapters) for extracting user interests and suggesting industries, along with a Next.js + Tailwind frontend. Below is a concise walkthrough of the folders and key files, and what each does today.
 
@@ -11,19 +11,15 @@ This repository contains a FastAPI backend that orchestrates a graph-based AI ag
 - `backend/requirements.txt`: Python dependencies specifically for the backend app.
 - `backend/app/main.py`: FastAPI application entrypoint. Exposes:
 - `POST /chatbot/`: Main interaction. Loads/merges session state, runs the agent, and persists results.
-- `GET /health`: Health/readiness probe.
+- `GET /health`: Liveness probe.
+- `GET /ready`: Supabase reachability probe.
 - `GET /session/{session_id}`: Retrieve persisted session state.
 - `backend/app/config.py`: Backend configuration and client helpers (e.g., OpenAI and Supabase client wrappers).
-- `backend/app/state_manager.py`: `get_state` / `save_state` helpers that persist and fetch session state (Supabase), keyed by `X-User-ID` and `session_id`.
+- `backend/app/state_manager.py`: `get_state` / `save_state` helpers that persist session state under a globally unique `session_id`; authenticated requests are owner-scoped by Supabase RLS.
 - `backend/app/utils/normalization.py`: Utilities to extract JSON from model responses and normalize values (lists, strings, casing).
 - `backend/app/utils/keywords.py`: Deterministic keyword extraction utilities leveraged by some nodes.
 
-### LangGraph Agent (`backend/app/langgraph_agent/`)
-- `__init__.py`: Package marker.
-- `graph_setup.py`: Wires the agent graph, router, and processing nodes. Defines execution flow.
-- `state_manager.py`: Shared state utilities referenced by nodes (import path convenience for agent code).
-
-#### Agent Nodes (`backend/app/langgraph_agent/nodes/`)
+### Agent Nodes (`backend/app/nodes/`)
 - `interests_node.py`: Extracts and normalizes user interests from `user_input`. Logic:
 - Prefers AI parsing that returns a JSON array, with robust fallbacks (split, normalization, acronym casing).
 - Canonicalizes common variants (e.g., `UX/UI`, `DevOps`, `MLOps`, `Front End Development`, `Backend Microservices`).
@@ -52,8 +48,8 @@ This repository contains a FastAPI backend that orchestrates a graph-based AI ag
 - `frontend/README.md`: Frontend-local README (setup, scripts).
 
 ## Current Behavior Summary
-- Backend FastAPI server on `127.0.0.1:8000` with `/health` for readiness.
-- `POST /chatbot/` expects JSON with `session_id` and `user_input` and an `X-User-ID` header. Returns a message and a `state` object including normalized `interests` and suggested `industries`.
+- Backend FastAPI server on `127.0.0.1:8000`; `/health` is liveness and `/ready` checks Supabase reachability.
+- `POST /chatbot/` expects JSON with `session_id` and `user_input` plus a Supabase bearer token. It returns normalized interests and suggested industries. The current frontend does not yet call this endpoint.
 - Interests normalization handles technical and non-technical phrases, commas and space-separated inputs, and acronym casing for `UX`, `UI`, `AI`, `ML`, `NLP`.
 
 ## Quick Start (Backend)
@@ -65,14 +61,15 @@ pip install -r backend/requirements.txt
 # Start server (no --factory)
 PYTHONPATH=backend uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log --app-dir backend
 
-# Health
+# Liveness and dependency readiness
 curl -sS http://127.0.0.1:8000/health | cat
+curl -sS http://127.0.0.1:8000/ready | cat
 
-# Example POST
-UUID=$(uuidgen); SESSION=$(uuidgen)
+# Example authenticated POST (set SUPABASE_ACCESS_TOKEN to a valid user token)
+SESSION=$(uuidgen)
 curl -sS -X POST \
 -H "Content-Type: application/json" \
--H "X-User-ID: $UUID" \
+-H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
 -d '{
 "session_id": "'$SESSION'",
 "user_input": "UX/UI, front end dev, backend microservices"
@@ -116,41 +113,50 @@ PYTHONPATH=backend .venv/bin/pytest -q backend/tests/test_interests.py
 ```
 OPENAI_API_KEY=sk-xxx
 SUPABASE_URL=https://your.supabase.co
-SUPABASE_KEY=public-or-service-key
+SUPABASE_KEY=your-supabase-anon-key
+SUPABASE_SERVICE_ROLE_KEY=server-only-service-role-key
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
+NEXT_PUBLIC_API_URL=http://localhost:8000
+CORS_ALLOWED_ORIGINS=http://localhost:3000
+OPENAI_TIMEOUT_SECONDS=30
 THEIRSTACK_API_KEY=ts-xxx
 ```
+
+Never put the Supabase service-role key in a `NEXT_PUBLIC_*` variable or expose it to the browser.
 
 ### Health Check
 After starting (detached or dev):
 ```
 curl -s http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/ready
 ```
 
 ### Chatbot Endpoint Example
 ```
 curl -s -X POST http://127.0.0.1:8000/chatbot/ \
+-H 'Authorization: Bearer <valid-supabase-access-token>' \
 -H 'Content-Type: application/json' \
 -d '{"session_id":"demo","user_input":"I like design"}'
 ```
 
 ### Persistence & State Normalization
-The backend persists session state to Supabase (table `session_states`) when a
-`session_id` is provided. Before persisting, the backend will automatically
+The backend persists authenticated session state to Supabase (table `session_states`). Session IDs are globally unique, and RLS restricts reads and writes to the owner identified by the bearer token. Authenticated database failures return `503`; they are not hidden by process-local memory fallback. Before persisting, the backend will automatically
 normalize model outputs by parsing JSON strings (including JSON returned inside
 triple-backtick code fences) into native JSON structures (lists/dicts). This
 ensures the stored `state` field contains structured data that the frontend and
 router can consume safely.
 
 Key points:
-- To enable Supabase persistence, set `SUPABASE_URL` and `SUPABASE_KEY` in
-your `.env` (the code expects `SUPABASE_KEY`). If you only have a
-`SUPABASE_SERVICE_KEY`, set `SUPABASE_KEY` to that value as well.
+- Set `SUPABASE_URL` and `SUPABASE_KEY` to the project URL and anon key. Set `SUPABASE_SERVICE_ROLE_KEY` separately for backend-only account deletion.
+- Apply the SQL migrations in order, including `backend/migrations/20260926_harden_session_state_rls.sql`, before deploying.
 - There's a convenience endpoint to inspect saved state:
 `GET /session/{session_id}` — returns the normalized saved state for debug.
 
 Example: fetch a saved session after posting to `/chatbot/`:
 ```
-curl -s http://127.0.0.1:8000/session/test-live-1
+curl -s -H 'Authorization: Bearer <valid-supabase-access-token>' \
+  http://127.0.0.1:8000/session/test-live-1
 ```
 
 ## Reproducing GitHub Actions unit job locally (Linux container)

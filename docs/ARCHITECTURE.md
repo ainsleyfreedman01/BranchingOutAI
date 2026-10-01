@@ -1,20 +1,20 @@
 # Backend Architecture — BranchingOutAI
 
-Date: December 16, 2025
+Date: September 26, 2026
 
 This document describes the backend architecture, responsibilities of each file, how components connect, the request flow, and developer run/test notes.
 
 ## High-level overview
-- The backend is a FastAPI service that runs a small agent/graph to extract user interests from free-form input and suggest related industries, job families, job titles, and skills.
+- The backend is a FastAPI service with authenticated session APIs and a small state-routed career exploration agent.
 - Key design choices:
   - LLM-first extraction with deterministic fallbacks for resilience.
   - Canonicalization and normalization (acronyms, multi-word phrases, deduplication).
-  - Persisted session state (Supabase) keyed by `session_id` and `X-User-ID`.
+  - Persisted session state in Supabase keyed by globally unique `session_id`; ownership is enforced with the verified Supabase user ID and row-level security.
 
 ## Top-level layout (backend/)
 - `backend/app/main.py` — FastAPI entrypoint and HTTP routes. Handles request validation, state initialization/cleanup, runs the agent graph, persists final state, and returns a response + state JSON.
 - `backend/app/config.py` — Creates and exposes external clients (LLM/chat client, Supabase client). Central location for API keys, timeouts, and request defaults.
-- `backend/app/state_manager.py` — Persistence layer. `get_state(session_id)` and `save_state(session_id, state)` implement Supabase interactions and light normalization/upsert logic.
+- `backend/app/state_manager.py` — Persistence layer. Authenticated requests use atomic Supabase upserts and fail with service unavailable when storage fails. Calls without an access token can use process memory for local development only.
 - `backend/app/utils/normalization.py` — Helpers for parsing model outputs (strip fences, JSON extraction), recursive normalization, type conversions.
 - `backend/app/utils/keywords.py` — Deterministic keyword extraction fallback using spaCy when available, otherwise heuristic splitting.
 
@@ -36,11 +36,21 @@ This document describes the backend architecture, responsibilities of each file,
 Each node reads/writes shared keys on a `state` dict. Nodes may call `client.chat(...)` (LLM) via `config.client` and persist state mid-flow if needed.
 
 ## Request flow (end-to-end)
-1. Client POSTs to `/chatbot/` with body `{ "session_id": "<uuid>", "user_input": "<text>" }` and header `X-User-ID: <uuid>`.
-2. `main.py` loads the current persisted state (if any) and merges incoming state, clears computed/derived fields to force recomputation, and runs the agent graph.
-3. The graph runs nodes in order (commonly: Interests → Industry → Job → Skills). Each node updates the shared `state` dict.
-4. Nodes use an LLM-first strategy and fall back to deterministic extraction when necessary. After node execution, `state` contains canonical `interests`, `industries`, and further artifacts depending on the path.
-5. `main.py` persists the final state (`state_manager.save_state`) and returns `{ "response": "<message>", "state": <state> }` to the caller.
+1. An authenticated client sends `POST /chatbot/` with `{ "session_id": "<globally-unique-id>", "user_input": "<text>" }` and `Authorization: Bearer <Supabase access token>`.
+2. FastAPI validates the token with Supabase. Blocking authentication, model, and database calls run in FastAPI's worker thread pool.
+3. The route loads the user's session state, clears derived fields, and asks `AgentGraph` to select one node. The current request processes interests and industries; it does not run the entire industry → job → skills flow in one request.
+4. The interests node makes up to two sequential OpenAI calls and uses deterministic fallbacks when model output is unavailable or unusable.
+5. The route upserts the state and returns normalized JSON. An authenticated persistence failure returns HTTP 503 rather than reporting an in-memory write as durable.
+
+The current Next.js graph page is a local interactive canvas and does not call `/chatbot/` or `/session/{session_id}`. The profile page calls `DELETE /account`; deleting the Supabase Auth user cascades to owned session rows through the database foreign key.
+
+## Security and failure boundaries
+- The browser uses Supabase's public anon key for Auth. The backend validates bearer tokens and passes the caller token to PostgREST so RLS evaluates the caller's identity.
+- The service-role key is backend-only and used for account deletion. The RLS migration adds owner policies plus a restrictive owner guard, preventing older permissive policies from widening access.
+- Raw user input is included in prompts sent to OpenAI; disclose this in product privacy terms and avoid logging prompt bodies or access tokens.
+- `/health` is a liveness endpoint. `/ready` checks Supabase table reachability. OpenAI is not required for readiness because the interest flow has deterministic fallbacks.
+- Rate limiting is process-local and removes expired keys; it is a single-process guard, not a cross-worker quota.
+- Session state is replaced as a JSON document; concurrent updates to one session are last-write-wins. A database error is logged and surfaced as 503; authenticated requests do not fall back to memory.
 
 ## State schema (typical keys)
 - `user_input`: raw string from request
@@ -83,11 +93,12 @@ pip install -r backend/requirements.txt
 ```bash
 PYTHONPATH=backend .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log --app-dir backend
 ```
-3. Health check and a sample POST (use separate terminal):
+3. Check liveness/readiness and send a sample authenticated POST (use a valid Supabase access token):
 ```bash
-curl -sS http://127.0.0.1:8000/health | cat
-UUID=$(uuidgen); SESSION=$(uuidgen)
-curl -sS -X POST -H "Content-Type: application/json" -H "X-User-ID: $UUID" -d '{"session_id":"'$SESSION'","user_input":"ux ui front end dev"}' http://127.0.0.1:8000/chatbot/ | .venv/bin/python -m json.tool
+curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1:8000/ready
+SESSION=$(uuidgen)
+curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d '{"session_id":"'$SESSION'","user_input":"ux ui front end dev"}' http://127.0.0.1:8000/chatbot/ | .venv/bin/python -m json.tool
 ```
 
 ## Where to modify behavior
@@ -95,9 +106,10 @@ curl -sS -X POST -H "Content-Type: application/json" -H "X-User-ID: $UUID" -d '{
 - Prompt text, system messages, and client config: `backend/app/config.py` and individual node files.
 - Persistence/upsert behavior: `backend/app/state_manager.py`.
 
-## Next docs or improvements (suggested)
-- Add a Mermaid sequence diagram to illustrate node order and data flow.
-- Expand acronym map (AR/VR, IoT) and add tests for those cases.
+## Operational notes
+- Apply migrations in order, including `20260926_harden_session_state_rls.sql`, before deploying the updated backend.
+- Set `CORS_ALLOWED_ORIGINS` to the deployed frontend origin and keep `SUPABASE_SERVICE_ROLE_KEY` server-side only.
+- `OPENAI_TIMEOUT_SECONDS` controls model request timeouts (default 30 seconds); API rate limits are process-local.
 
 ---
 

@@ -1,7 +1,8 @@
-"""State manager with optional Supabase persistence and in-memory fallback.
+"""State manager with durable Supabase persistence and a local-only fallback.
 
-Uses `get_supabase()` from `app.config`. If Supabase is not configured, keeps
-session state in an in-memory dict for the process lifetime.
+Uses `get_supabase()` from `app.config`. Calls without an access token may use
+in-memory state for local development; authenticated calls fail closed when
+Supabase is unavailable or returns an error.
 """
 
 from typing import Dict, Any
@@ -13,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 _memory_store: Dict[str, Dict[str, Any]] = {}
+
+
+class StatePersistenceUnavailable(RuntimeError):
+    """Raised when an authenticated session cannot reach durable storage."""
 
 
 def _memory_key(session_id: str, user_id: str | None) -> str:
@@ -43,9 +48,11 @@ def get_state(session_id: str, user_id: str | None = None, access_token: str | N
     Returns:
         dict: The session state.
     """
+    if access_token is None:
+        return _memory_store.get(_memory_key(session_id, user_id), {})
     sb = _get_supabase_client(access_token)
     if sb is None:
-        return _memory_store.get(_memory_key(session_id, user_id), {})
+        raise StatePersistenceUnavailable("Supabase is unavailable for authenticated session access")
     try:
         # Avoid using `.single()` which raises when there are 0 rows.
         # If a user_id is provided, prefer user-scoped row; if not found, fall back
@@ -70,9 +77,8 @@ def get_state(session_id: str, user_id: str | None = None, access_token: str | N
             return data.get("state", {}) or {}
         return {}
     except Exception:
-        # If Supabase is misconfigured, log the error and fall back to memory
         logger.exception("get_state: Supabase query failed for session_id=%s", session_id)
-        return _memory_store.get(_memory_key(session_id, user_id), {})
+        raise StatePersistenceUnavailable("Unable to load session state") from None
 
 
 def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = None, access_token: str | None = None) -> None:
@@ -85,60 +91,24 @@ def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = Non
     # Normalize state (parse JSON strings into structures) before saving.
     normalized = normalize_state(state)
 
-    sb = _get_supabase_client(access_token)
-    if sb is None:
+    if access_token is None:
         # persist to in-memory store; attach user_id if present
         entry = dict(normalized)
         if user_id is not None:
             entry.setdefault("user_id", user_id)
         _memory_store[_memory_key(session_id, user_id)] = entry
         return
+    sb = _get_supabase_client(access_token)
+    if sb is None:
+        raise StatePersistenceUnavailable("Supabase is unavailable for authenticated session access")
+    payload = {"session_id": session_id, "state": normalized}
+    if user_id is not None:
+        payload["user_id"] = user_id
+
     try:
-        if user_id is not None:
-            # Atomic upsert keyed on the existing unique constraint on session_id
-            # (the (user_id, session_id) index is partial, which PostgREST's
-            # on_conflict target can't match), avoiding the select-then-
-            # update/insert race of the generic path below.
-            payload = {"session_id": session_id, "state": normalized, "user_id": user_id}
-            sb.table("session_states").upsert(payload, on_conflict="session_id").execute()
-            return
-        # Prefer a single upsert call when supported by the client to avoid
-        # races and multiple round-trips. Build an insert payload and only
-        # include `user_id` when provided.
-        insert_payload = {"session_id": session_id, "state": normalized}
-        if user_id is not None:
-            insert_payload["user_id"] = user_id
-
-        # Many supabase clients expose `.upsert()`; if available this will
-        # create-or-update the row atomically based on primary/unique keys.
-        try:
-            sb.table("session_states").upsert(insert_payload).execute()
-            return
-        except Exception:
-            # Fall back to select->update/insert behavior if upsert isn't
-            # supported or fails for any reason.
-            logger.debug("save_state: upsert failed, falling back to select/update/insert")
-
-        # Check for existing row by session_id and update or insert accordingly.
-        res = sb.table("session_states").select("*").eq("session_id", session_id).execute()
-        existing = getattr(res, "data", None)
-
-        payload = {"state": normalized}
-        if user_id is not None:
-            payload["user_id"] = user_id
-
-        if isinstance(existing, list) and len(existing) > 0:
-            sb.table("session_states").update(payload).eq("session_id", session_id).execute()
-        elif isinstance(existing, dict) and existing.get("state") is not None:
-            sb.table("session_states").update(payload).eq("session_id", session_id).execute()
-        else:
-            sb.table("session_states").insert(insert_payload).execute()
-    except Exception:
-        # If Supabase is misconfigured or the table is missing, log and persist to memory instead
+        # session_id is globally unique; RLS prevents an upsert from modifying
+        # a row owned by another authenticated user.
+        sb.table("session_states").upsert(payload, on_conflict="session_id").execute()
+    except Exception as exc:
         logger.exception("save_state: Supabase write failed for session_id=%s", session_id)
-        if user_id is not None:
-            entry = dict(normalized)
-            entry.setdefault("user_id", user_id)
-            _memory_store[_memory_key(session_id, user_id)] = entry
-        else:
-            _memory_store[_memory_key(session_id, user_id)] = normalized
+        raise StatePersistenceUnavailable("Unable to save session state") from exc

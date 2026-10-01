@@ -1,7 +1,7 @@
 # backend/app/main.py
 import os
 import time
-from collections import defaultdict, deque
+from collections import deque
 from threading import Lock
 from typing import NamedTuple
 
@@ -10,8 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from app.graph_setup import agent_graph
-from app.state_manager import get_state, save_state
+from app.state_manager import StatePersistenceUnavailable, get_state, save_state
 from app.utils.normalization import normalize_state
 
 # FastAPI instance
@@ -34,14 +35,23 @@ app.add_middleware(
 
 class InMemoryRateLimiter:
     def __init__(self):
-        self._requests: dict[str, deque[float]] = defaultdict(deque)
+        self._requests: dict[str, deque[float]] = {}
         self._lock = Lock()
+        self._next_cleanup = 0.0
 
     def allow(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
-            timestamps = self._requests[key]
+            if now >= self._next_cleanup:
+                for tracked_key, tracked_times in list(self._requests.items()):
+                    while tracked_times and tracked_times[0] <= cutoff:
+                        tracked_times.popleft()
+                    if not tracked_times:
+                        del self._requests[tracked_key]
+                self._next_cleanup = now + min(window_seconds, 60)
+
+            timestamps = self._requests.setdefault(key, deque())
             while timestamps and timestamps[0] <= cutoff:
                 timestamps.popleft()
             if len(timestamps) >= limit:
@@ -66,6 +76,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+
+@app.exception_handler(StatePersistenceUnavailable)
+async def state_persistence_unavailable_handler(request: Request, exc: StatePersistenceUnavailable):
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Session storage is unavailable"},
+    )
+
 # Pydantic model for request validation
 class ChatInput(BaseModel):
     session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -80,7 +98,7 @@ class AuthenticatedUser(NamedTuple):
     access_token: str
 
 
-async def authenticated_user(
+def authenticated_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> AuthenticatedUser:
     """Validate the Supabase access token and return its server-trusted user ID."""
@@ -111,11 +129,11 @@ async def enforce_rate_limit(
     try:
         limit = max(1, int(os.getenv("API_RATE_LIMIT_REQUESTS", "30")))
         window_seconds = max(1, int(os.getenv("API_RATE_LIMIT_WINDOW_SECONDS", "60")))
+        ip_limit = max(limit, int(os.getenv("API_RATE_LIMIT_IP_REQUESTS", str(limit * 2))))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting is unavailable") from exc
 
     client_host = request.client.host if request.client else "unknown"
-    ip_limit = max(limit, int(os.getenv("API_RATE_LIMIT_IP_REQUESTS", str(limit * 2))))
     user_allowed, retry_after = rate_limiter.allow(f"user:{auth.id}", limit, window_seconds)
     ip_allowed, ip_retry_after = rate_limiter.allow(f"ip:{client_host}", ip_limit, window_seconds)
     if not user_allowed or not ip_allowed:
@@ -127,7 +145,7 @@ async def enforce_rate_limit(
 
 # Endpoint to interact with the chatbot
 @app.post("/chatbot/", dependencies=[Depends(enforce_rate_limit)])
-async def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Handle chatbot interaction.
     
     Args:
@@ -174,7 +192,7 @@ async def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(au
 
 
 @app.get("/session/{session_id}", dependencies=[Depends(enforce_rate_limit)])
-async def get_session(session_id: str, auth: AuthenticatedUser = Depends(authenticated_user)):
+def get_session(session_id: str, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Return the saved session state for a given session_id."""
     state = get_state(session_id, user_id=auth.id, access_token=auth.access_token)
     # ensure returned state is normalized
@@ -183,7 +201,7 @@ async def get_session(session_id: str, auth: AuthenticatedUser = Depends(authent
 
 
 @app.delete("/account", dependencies=[Depends(enforce_rate_limit)])
-async def delete_account(auth: AuthenticatedUser = Depends(authenticated_user)):
+def delete_account(auth: AuthenticatedUser = Depends(authenticated_user)):
     """Delete the authenticated user's saved data and Supabase account."""
     from app.config import get_supabase_admin
 
@@ -191,7 +209,6 @@ async def delete_account(auth: AuthenticatedUser = Depends(authenticated_user)):
     if admin_client is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Account deletion is unavailable")
     try:
-        admin_client.table("session_states").delete().eq("user_id", auth.id).execute()
         admin_client.auth.admin.delete_user(auth.id)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to delete account") from exc
@@ -200,8 +217,23 @@ async def delete_account(auth: AuthenticatedUser = Depends(authenticated_user)):
 # Optional: health check
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
+    """Liveness check; dependency availability is reported by /ready."""
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready():
+    """Check that the configured Supabase database endpoint is reachable."""
+    from app.config import get_supabase
+
+    client = get_supabase()
+    if client is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is unavailable")
+    try:
+        client.table("session_states").select("session_id").limit(1).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase is unavailable") from exc
+    return {"status": "ready"}
 
 
 # Root route for quick checks / browser

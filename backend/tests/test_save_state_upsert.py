@@ -8,9 +8,10 @@ def test_save_state_uses_upsert_when_available(monkeypatch):
             self.upsert_called = False
             self.upsert_payload = None
 
-        def upsert(self, payload):
+        def upsert(self, payload, on_conflict=None):
             self.upsert_called = True
             self.upsert_payload = payload
+            self.on_conflict = on_conflict
             return self
 
         def execute(self):
@@ -28,14 +29,15 @@ def test_save_state_uses_upsert_when_available(monkeypatch):
     fake_client = FakeClientUpsert(fake_table)
 
     import app.state_manager as sm
-    monkeypatch.setattr(sm, "_supabase_client", lambda: fake_client)
+    monkeypatch.setattr(sm, "_supabase_client", lambda access_token=None: fake_client)
 
     raw = {"interests": '{"a":2, "b":[4]}' }
     session_id = "test-upsert-1"
 
-    save_state(session_id, raw)
+    save_state(session_id, raw, user_id="test-user", access_token="test-token")
 
     assert fake_table.upsert_called is True
+    assert fake_table.on_conflict == "session_id"
     assert isinstance(fake_table.upsert_payload, dict)
     assert fake_table.upsert_payload["session_id"] == session_id
     assert isinstance(fake_table.upsert_payload["state"], dict)

@@ -1,4 +1,5 @@
 import os
+from threading import Lock
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -20,6 +21,22 @@ load_dotenv()
 
 # ---- OpenAI configuration ----
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+_openai_client = None
+_openai_client_lock = Lock()
+
+
+def _get_openai_sdk_client(OpenAIClass):
+    global _openai_client
+    if _openai_client is None:
+        with _openai_client_lock:
+            if _openai_client is None:
+                timeout_seconds = max(1.0, float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30")))
+                _openai_client = OpenAIClass(
+                    api_key=OPENAI_API_KEY,
+                    timeout=timeout_seconds,
+                    max_retries=0,
+                )
+    return _openai_client
 
 
 class OpenAIClient:
@@ -44,8 +61,8 @@ class OpenAIClient:
             # New-style client
             OpenAIClass = getattr(openai, "OpenAI", None)
             if OpenAIClass is not None:
-                client = OpenAIClass(api_key=OPENAI_API_KEY)
-                resp = client.chat.completions.create(
+                sdk_client = _get_openai_sdk_client(OpenAIClass)
+                resp = sdk_client.chat.completions.create(
                     model=model,
                     messages=messages,
                     temperature=temperature,
@@ -70,6 +87,7 @@ class OpenAIClient:
                 model=model,
                 messages=messages,
                 temperature=temperature,
+                request_timeout=max(1.0, float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))),
             )
             return resp.choices[0].message.content
         except Exception:

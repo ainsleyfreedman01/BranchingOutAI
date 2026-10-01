@@ -19,7 +19,8 @@ The `app/` package contains the FastAPI application and the agent wiring.
 - `main.py`
   - Purpose: FastAPI ASGI entrypoint. It creates the application instance, mounts routes, and exposes the public API endpoints such as:
     - `POST /chatbot/` — run the agent for the given `session_id` and `user_input`.
-    - `GET /health` — readiness probe.
+    - `GET /health` — liveness probe.
+    - `GET /ready` — Supabase reachability probe.
     - `GET /session/{session_id}` — fetch persisted, normalized session state.
   - Usage: run with `PYTHONPATH=backend uvicorn app.main:app --host 127.0.0.1 --port 8000`.
 
@@ -27,11 +28,11 @@ The `app/` package contains the FastAPI application and the agent wiring.
   - Purpose: central location for configuration and client factories (OpenAI client, Supabase client, environment-driven config). Keep secrets out of code; use environment variables.
 
 - `state_manager.py`
-  - Purpose: helpers to `get_state` and `save_state` (Supabase-backed persistence). These functions are used by nodes and the API to persist normalized session state.
+  - Purpose: helpers to `get_state` and `save_state`. Authenticated persistence errors fail closed; the process-local memory fallback is for calls without a user access token during local development.
 
 - `graph_setup.py`
   - Purpose: wiring for the agent graph. Builds/instantiates nodes, configures the graph runner, and returns the graph entrypoints used by the API.
-  - Notes: The graph setup was recently updated to prefer a LangGraph-compatible runner when the optional LangGraph adapter is present (see `langgraph_adapter.py` / `langgraph_wrappers.py`). If LangGraph is not available at runtime, `graph_setup.py` falls back to the LangChain-compatible runner.
+  - Notes: Optional adapters provide LangChain/LangGraph compatibility. The HTTP path currently uses the router to choose one node per request; installing an adapter does not make the full career workflow run end-to-end.
 
 - `langchain_adapter.py` (if present)
   - Purpose: compatibility helpers that wrap LangChain primitives so nodes and tests can be run consistently in LangChain-first environments.
@@ -46,14 +47,8 @@ The `app/` package contains the FastAPI application and the agent wiring.
   - `normalization.py`: parsing and normalization utilities to convert model outputs (often stringified JSON or code-block JSON) into structured Python objects (lists/dicts) and canonicalize values (e.g., `UX/UI` → `UX, UI`).
   - `keywords.py`: deterministic keyword and phrase extraction helpers used by interest extraction nodes.
 
-## `langgraph_agent/` package
+## `app/nodes/`
 
-This package contains the graph nodes and orchestrator used by the backend agent.
-
-- `graph_setup.py` (see above) — graph wiring.
-- `state_manager.py` (thin compatibility shim referencing `app/state_manager.py`).
-
-### `langgraph_agent/nodes/`
 Contains the individual nodes used in the graph (each node is responsible for one transformation/step in the agent flow):
 
 - `interests_node.py`
@@ -90,10 +85,15 @@ PYTHONPATH=backend .venv/bin/pytest -q -m "not integration"
   - The project root `README.md` includes a Docker command that mirrors the GitHub Actions unit job. The CI uses `backend/requirements-ci.txt` (pinned list) to ensure reproducible installs on the CI image.
 
 - Optional adapters:
-  - `langgraph_adapter.py` and `langgraph_wrappers.py` are optional files; they enable running the graph using LangGraph if you have it installed. The codebase prefers LangGraph when present but remains LangChain-compatible.
+  - `langgraph_adapter.py` and `langgraph_wrappers.py` provide compatibility shims. The HTTP request currently uses the router to select one node; it does not run the complete multi-node career workflow in one request.
+
+- Authentication and persistence:
+  - `/chatbot/`, `/session/{session_id}`, and `/account` require a Supabase bearer token.
+  - Session IDs are globally unique. RLS enforces that callers can access only rows whose `user_id` matches their Supabase identity.
+  - Apply all SQL migrations, including `20260926_harden_session_state_rls.sql`, before deploying this backend.
 
 ## When to modify these files
 
-- Add nodes under `langgraph_agent/nodes/` when you need a new transformation step in the agent flow.
+- Add nodes under `app/nodes/` when you need a new transformation step in the agent flow.
 - Update `requirements-ci.txt` only when CI proves it is necessary to pin or bump packages (aim for minimal, well-justified changes).
 - Keep `config.py` free of secrets; use environment variables and `.env` files for local development.

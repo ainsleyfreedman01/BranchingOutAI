@@ -23,103 +23,62 @@ def test_save_state_in_memory_normalizes(monkeypatch):
     assert saved["skills"]["hard"] == ["py"]
 
 
-def test_save_state_calls_supabase_insert_and_update(monkeypatch):
-    # Fake supabase client that records insert/update data
+def test_save_state_uses_atomic_supabase_upsert(monkeypatch):
+    # Fake Supabase client that records atomic upsert data.
     class FakeTable:
         def __init__(self):
-            self.inserted = None
-            self.updated = None
+            self.upserted = None
+            self.conflict_target = None
 
-        def select(self, *_a, **_k):
-            return self
-
-        def eq(self, *_a, **_k):
-            return self
-
-        def single(self):
+        def upsert(self, payload, on_conflict=None):
+            self.upserted = payload
+            self.conflict_target = on_conflict
             return self
 
         def execute(self):
-            return types.SimpleNamespace(data=None)
-
-        def update(self, payload):
-            self.updated = payload
-            return self
-
-        def insert(self, payload):
-            self.inserted = payload
-            return self
-
-    class FakeClient:
-        def __init__(self, table_obj):
-            self._table = table_obj
-
-        def table(self, name):
-            return self._table
+            return types.SimpleNamespace(data=[self.upserted])
 
     fake_table = FakeTable()
-    fake_client = FakeClient(fake_table)
+    fake_client = type("FakeClient", (), {"table": lambda self, name: fake_table})()
 
     import app.state_manager as sm
-    monkeypatch.setattr(sm, "_supabase_client", lambda: fake_client)
+    monkeypatch.setattr(sm, "_supabase_client", lambda access_token=None: fake_client)
 
     raw = {"interests": '{"a":1, "b":[2,3]}'}
     session_id = "test-sb-1"
 
-    save_state(session_id, raw)
+    save_state(session_id, raw, user_id="test-user", access_token="test-token")
 
-    # For new insert, FakeTable.insert should have been called with normalized state
-    assert fake_table.inserted is not None
-    assert isinstance(fake_table.inserted["state"], dict)
-    assert fake_table.inserted["state"]["interests"]["a"] == 1
+    assert fake_table.conflict_target == "session_id"
+    assert fake_table.upserted["session_id"] == session_id
+    assert fake_table.upserted["state"]["interests"]["a"] == 1
 
 
-def test_save_state_update_existing(monkeypatch):
-    # Simulate an existing row so save_state should call update
-    class FakeTableExisting:
+def test_save_state_upserts_existing_rows_without_read_then_write(monkeypatch):
+    class FakeTable:
         def __init__(self):
-            self.inserted = None
-            self.updated = None
+            self.upserted = None
 
-        def select(self, *_a, **_k):
-            return self
-
-        def eq(self, *_a, **_k):
-            return self
-
-        def single(self):
+        def upsert(self, payload, on_conflict=None):
+            self.upserted = payload
             return self
 
         def execute(self):
-            # Return existing data to indicate the row exists
-            return types.SimpleNamespace(data={"state": {"interests": {"a": 0}}})
+            return types.SimpleNamespace(data=[self.upserted])
 
-        def update(self, payload):
-            self.updated = payload
-            return self
-
-        def insert(self, payload):
-            self.inserted = payload
-            return self
-
-    class FakeClientExisting:
-        def __init__(self, table_obj):
-            self._table = table_obj
-
-        def table(self, name):
-            return self._table
-
-    fake_table = FakeTableExisting()
-    fake_client = FakeClientExisting(fake_table)
+    fake_table = FakeTable()
+    fake_client = type("FakeClient", (), {"table": lambda self, name: fake_table})()
 
     import app.state_manager as sm
-    monkeypatch.setattr(sm, "_supabase_client", lambda: fake_client)
+    monkeypatch.setattr(sm, "_supabase_client", lambda access_token=None: fake_client)
 
-    raw = {"interests": '{"a":1, "b":[2,3]}'}
-    session_id = "test-sb-2"
+    session_id = "test-sb-1"
+    save_state(
+        session_id,
+        {"interests": '{"a":1, "b":[2,3]}'},
+        user_id="test-user",
+        access_token="test-token",
+    )
 
-    save_state(session_id, raw)
-
-    # Since the row existed, update should be called with normalized state
-    assert fake_table.updated is not None
-    assert fake_table.updated["state"]["interests"]["a"] == 1
+    assert fake_table.upserted["session_id"] == session_id
+    assert fake_table.upserted["state"]["interests"]["a"] == 1
