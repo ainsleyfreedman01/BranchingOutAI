@@ -140,7 +140,10 @@ curl -s http://127.0.0.1:8000/health
 curl -s http://127.0.0.1:8000/ready
 ```
 
-### Chatbot Endpoint Example
+### Legacy Chatbot Endpoint Example
+
+This endpoint demonstrates the separate state-routed chatbot API. The current graph frontend uses the `/career-tree/*` endpoints instead.
+
 ```
 curl -s -X POST http://127.0.0.1:8000/chatbot/ \
 -H 'Authorization: Bearer <valid-supabase-access-token>' \
