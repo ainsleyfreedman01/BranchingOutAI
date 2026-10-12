@@ -10,7 +10,8 @@ BranchingOutAI is a career-exploration app. Its Next.js frontend displays an int
 ### Backend (`backend/`)
 - `backend/requirements.txt`: Python dependencies specifically for the backend app.
 - `backend/app/main.py`: FastAPI application entrypoint. Exposes:
-- `POST /career-tree/initialize`, `/expand`, `/state`, `/reset`, `/delete`, `/message`, `/explain`, `/changes`, and `/jobs`: API used by the current graph experience.
+- `POST /career-tree/initialize`, `/expand`, `/reset`, `/delete`, `/message`, `/explain`, `/changes`, and `/jobs`: API used by the current graph experience.
+- `PUT /career-tree/state`: Saves the current graph state.
 - `GET /career-tree/session`: Loads the signed-in user's account-level graph.
 - `POST /chatbot/`: Separate, older state-routed chat flow; it is not the API used by the current graph page.
 - `GET /health`: Liveness probe.
