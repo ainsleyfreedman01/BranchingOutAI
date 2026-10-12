@@ -1,6 +1,6 @@
 ## Project Structure Overview — Updated September 26, 2026
 
-This repository contains a FastAPI backend that orchestrates a graph-based AI agent (LangChain + optional LangGraph adapters) for extracting user interests and suggesting industries, along with a Next.js + Tailwind frontend. Below is a concise walkthrough of the folders and key files, and what each does today.
+BranchingOutAI is a career-exploration app. Its Next.js frontend displays an interactive career graph, and its FastAPI backend creates and saves career paths, provides AI guidance, and searches live job listings. Supabase handles sign-in and account-scoped data; OpenAI powers suggestions and guidance.
 
 ### Root
 - `README.md`: This document. Project overview and file map.
@@ -10,16 +10,18 @@ This repository contains a FastAPI backend that orchestrates a graph-based AI ag
 ### Backend (`backend/`)
 - `backend/requirements.txt`: Python dependencies specifically for the backend app.
 - `backend/app/main.py`: FastAPI application entrypoint. Exposes:
-- `POST /chatbot/`: Main interaction. Loads/merges session state, runs the agent, and persists results.
+- `POST /career-tree/initialize`, `/expand`, `/state`, `/reset`, `/delete`, `/message`, `/explain`, `/changes`, and `/jobs`: API used by the current graph experience.
+- `GET /career-tree/session`: Loads the signed-in user's account-level graph.
+- `POST /chatbot/`: Separate, older state-routed chat flow; it is not the API used by the current graph page.
 - `GET /health`: Liveness probe.
 - `GET /ready`: Supabase reachability probe.
-- `GET /session/{session_id}`: Retrieve persisted session state.
+- `GET /session/{session_id}`: Retrieve persisted session state for debugging or legacy clients.
 - `backend/app/config.py`: Backend configuration and client helpers (e.g., OpenAI and Supabase client wrappers).
 - `backend/app/state_manager.py`: `get_state` / `save_state` helpers that persist session state under a globally unique `session_id`; authenticated requests are owner-scoped by Supabase RLS.
 - `backend/app/utils/normalization.py`: Utilities to extract JSON from model responses and normalize values (lists, strings, casing).
 - `backend/app/utils/keywords.py`: Deterministic keyword extraction utilities leveraged by some nodes.
 
-### Agent Nodes (`backend/app/nodes/`)
+### Legacy chatbot agent nodes (`backend/app/nodes/`)
 - `interests_node.py`: Extracts and normalizes user interests from `user_input`. Logic:
 - Prefers AI parsing that returns a JSON array, with robust fallbacks (split, normalization, acronym casing).
 - Canonicalizes common variants (e.g., `UX/UI`, `DevOps`, `MLOps`, `Front End Development`, `Backend Microservices`).
@@ -49,8 +51,10 @@ This repository contains a FastAPI backend that orchestrates a graph-based AI ag
 
 ## Current Behavior Summary
 - Backend FastAPI server on `127.0.0.1:8000`; `/health` is liveness and `/ready` checks Supabase reachability.
-- `POST /chatbot/` expects JSON with `session_id` and `user_input` plus a Supabase bearer token. It returns normalized interests and suggested industries. The current frontend does not yet call this endpoint.
-- Interests normalization handles technical and non-technical phrases, commas and space-separated inputs, and acronym casing for `UX`, `UI`, `AI`, `ML`, `NLP`.
+- The graph page calls authenticated `/career-tree/*` endpoints. It starts with interest nodes, then generates industries and roles as the user expands branches.
+- `/chatbot/` remains a separate legacy API flow. Its agent processes a request from session state; the current graph page does not use it.
+- Career suggestions are checked against their originating interest path before being saved. Job searches use the external TheirStack provider and return listings rather than generated placeholders.
+- The backend persists signed-in users' graph/session state in Supabase with owner-scoped row-level security.
 
 ## Quick Start (Backend)
 ```bash
