@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BranchingOutAI frontend
 
-## Getting Started
+The frontend is a Next.js app using React and TypeScript. It provides the landing page, Supabase sign-in and account settings, and the interactive career graph. The graph page calls the FastAPI backend for saved graph data, branch suggestions, career guidance, explanations, and live job searches.
 
-First, run the development server:
+## Run locally
+
+From this directory:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). For the graph and account features, also run the backend as described in the repository-root `README.md`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Set these frontend environment variables in a local `.env.local` file:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` — public Supabase anon key used by Supabase Auth.
+- `NEXT_PUBLIC_API_URL` — backend base URL, such as `http://localhost:8000`.
 
-## Learn More
+Only public client configuration belongs in `NEXT_PUBLIC_*` variables. Never put Supabase service-role credentials or external provider API keys in the frontend.
 
-To learn more about Next.js, take a look at the following resources:
+## Useful locations
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `src/app/` — Next.js routes: home, graph, profile, password reset, privacy, and terms.
+- `src/components/` — shared interface components.
+- `src/context/AuthContext.tsx` — current Supabase user and session state.
+- `src/lib/graphApi.mjs` — authenticated calls to the backend career-tree API.
+- `src/lib/branchTree.mjs`, `radialTreeLayout.mjs`, and `graphAnimation.mjs` — graph display and layout helpers.
+- `src/lib/*.test.mjs` — Node tests for frontend helper modules.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Checks
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm test
+npm run lint
+npm run build
+```
