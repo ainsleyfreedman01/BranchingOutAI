@@ -2,13 +2,90 @@
 from app.config import client
 from app.state_manager import save_state, get_state
 from app.utils.keywords import extract_keywords
+from app.utils.acronyms import canonicalize_acronyms
 import re
+import json
 try:
     import spacy
     _SPACY_AVAILABLE = True
 except Exception:
     spacy = None
     _SPACY_AVAILABLE = False
+
+def _canonicalize_acronyms(value):
+    return canonicalize_acronyms(str(value))
+
+
+def _fallback_career_paths(interests, industries):
+    interest_text = " ".join(str(item) for item in interests).lower()
+    catalog = [
+        (r"software|engineering|developer", "Software Engineer", "Technology", ["software engineering", "engineering"]),
+        (r"\bai\b|\bml\b|machine learning", "Machine Learning Engineer", "Technology", ["AI/ML", "software engineering"]),
+        (r"data analytics|data analysis|data science|analytics", "Data Analyst", "Technology", ["data analytics", "data science"]),
+        (r"product management|\bproduct\b", "Responsible AI Product Manager", "Technology", ["product management", "AI ethics", "AI governance"]),
+        (r"ux|user research|research", "UX Researcher", "Technology", ["UX research", "people-focused problem solving"]),
+        (r"ethics|governance|responsible ai", "AI Ethics and Governance Analyst", "Technology", ["AI ethics", "AI governance", "responsible AI"]),
+        (r"education|edtech|teaching", "Education Technology Product Manager", "Education", ["education technology", "product management"]),
+        (r"nonprofit|community|social impact|jewish", "Nonprofit Technology Program Manager", "Nonprofit", ["nonprofit work", "community work", "social impact"]),
+        (r"jewish studies|humanities|history", "Digital Humanities Researcher", "Education", ["Jewish studies", "research"]),
+    ]
+    paths = []
+    for pattern, title, default_industry, related in catalog:
+        if re.search(pattern, interest_text, re.I):
+            industry = next((str(item) for item in industries if re.search(default_industry, str(item), re.I)), default_industry)
+            paths.append({
+                "title": title,
+                "industry": industry,
+                "rationale": f"Connects {', '.join(related[:2])} with your interests.",
+                "related_interests": related,
+            })
+    if not paths:
+        paths = [
+            {"title": "Product Analyst", "industry": "Technology", "rationale": "Connects problem-solving with product decisions.", "related_interests": []},
+            {"title": "Program Manager", "industry": "Technology", "rationale": "Brings people and projects together to create impact.", "related_interests": []},
+            {"title": "User Researcher", "industry": "Technology", "rationale": "Uses research to make services more useful.", "related_interests": []},
+        ]
+    return paths[:10]
+
+
+def _parse_career_paths(response, interests, industries):
+    if isinstance(response, dict):
+        candidates = response.get("career_paths", response.get("paths", []))
+    elif isinstance(response, (list, tuple)):
+        candidates = response
+    else:
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(response).strip(), flags=re.I | re.M)
+        try:
+            candidates = json.loads(text)
+        except (TypeError, ValueError):
+            candidates = []
+
+    industry_names = {str(industry).casefold() for industry in industries}
+    paths = []
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if isinstance(candidate, str):
+                title = candidate.strip()
+                path = {"title": title}
+            elif isinstance(candidate, dict):
+                path = candidate
+                title = str(path.get("title") or path.get("name") or "").strip()
+            else:
+                continue
+            if not title or title.casefold() in industry_names:
+                continue
+            industry = str(path.get("industry") or (industries[0] if industries else "Career Exploration"))
+            related = path.get("related_interests") or path.get("interests") or []
+            if not isinstance(related, list):
+                related = [str(related)]
+            paths.append({
+                "title": _canonicalize_acronyms(title),
+                "industry": _canonicalize_acronyms(industry),
+                "rationale": str(path.get("rationale") or path.get("description") or ""),
+                "related_interests": [_canonicalize_acronyms(item) for item in related],
+            })
+    return paths[:10] or _fallback_career_paths(interests, industries)
+
 
 class InterestsNode:
     def process(self, user_input, state, session_id=None):
@@ -394,6 +471,8 @@ class InterestsNode:
         # Always replace interests with the canonical ones extracted from current input
         state["interests"] = final_interests if final_interests else ([user_input] if user_input else [])
 
+        state["interests"] = [_canonicalize_acronyms(item) for item in state["interests"]]
+
         # Ask OpenAI for 2-3 industries (JSON list only). This call may fail
         # in environments without OPENAI_API_KEY or network access; in that
         # case we fall back to a deterministic heuristic.
@@ -452,8 +531,23 @@ class InterestsNode:
             industries_list = [p.title() for p in parts][:3]
         state["industries"] = industries_list
 
+        try:
+            career_path_response = client.chat(
+                messages=[
+                    {"role": "system", "content": "You are a warm, practical career exploration guide. Suggest varied and realistic roles without making promises."},
+                    {"role": "user", "content": (
+                        "Suggest 4-8 distinct career paths that combine or branch across the user's interests. "
+                        "Return ONLY a JSON array of objects with title, industry, rationale, and related_interests. "
+                        f"Interests: {', '.join(state['interests'])}. Industries: {', '.join(map(str, industries_list))}."
+                    )},
+                ]
+            )
+        except Exception:
+            career_path_response = []
+        state["career_paths"] = _parse_career_paths(career_path_response, state["interests"], industries_list)
+
         # Save to Supabase
         if session_id:
             save_state(session_id, state)
 
-        return "Here are some industries you might explore.", state
+        return "Great starting point! Here are a few industries that could connect with your interests. Which one feels worth exploring?", state

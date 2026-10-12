@@ -38,4 +38,4 @@ class SkillsNode:
         if session_id:
             save_state(session_id, state)
 
-        return "Here are the skills related to this job.", state
+        return "Great choice! Here are some skills that can help you grow in this role.", state

@@ -81,6 +81,43 @@ def get_state(session_id: str, user_id: str | None = None, access_token: str | N
         raise StatePersistenceUnavailable("Unable to load session state") from None
 
 
+def get_account_graph_session(user_id: str, access_token: str) -> tuple[str, Dict[str, Any]]:
+    """Resolve one durable career graph per account, retaining legacy saves."""
+    session_id = f"career-graph:{user_id}"
+    sb = _get_supabase_client(access_token)
+    if sb is None:
+        raise StatePersistenceUnavailable("Supabase is unavailable for authenticated session access")
+    try:
+        result = sb.table("session_states").select("session_id,state").eq("user_id", user_id).execute()
+        rows = result.data
+        if not isinstance(rows, list):
+            raise ValueError("Unexpected session lookup response")
+        for row in rows:
+            if row["session_id"] == session_id:
+                return session_id, normalize_state(row.get("state") or {})
+
+        # An empty preview session must not displace a populated browser graph.
+        # With multiple legacy trees, adopt the most developed one deterministically.
+        def legacy_rank(row):
+            state = normalize_state(row.get("state") or {})
+            tree = state.get("career_tree")
+            nodes = tree.get("nodes", []) if isinstance(tree, dict) else []
+            return (len(nodes), bool(state.get("interests") or state.get("chat_history")), row["session_id"])
+
+        legacy = max(rows, key=legacy_rank) if rows else None
+        state = normalize_state(legacy.get("state") or {}) if legacy else {}
+        sb.table("session_states").upsert(
+            {"session_id": session_id, "user_id": user_id, "state": state},
+            on_conflict="session_id",
+            ignore_duplicates=True,
+        ).execute()
+    except Exception as exc:
+        logger.exception("get_account_graph_session: Supabase resolution failed")
+        raise StatePersistenceUnavailable("Unable to load account career graph") from exc
+    # Another browser may have created the account row concurrently.
+    return session_id, get_state(session_id, user_id=user_id, access_token=access_token)
+
+
 def save_state(session_id: str, state: Dict[str, Any], user_id: str | None = None, access_token: str | None = None) -> None:
     """Save state to Supabase or in-memory dict.
     

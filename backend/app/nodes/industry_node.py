@@ -40,4 +40,4 @@ class IndustryNode:
         if session_id:
             save_state(session_id, state)
 
-        return "Here are some job families in this industry.", state
+        return "Nice choice! Here are a few job families in this industry. Which one sounds interesting to you?", state

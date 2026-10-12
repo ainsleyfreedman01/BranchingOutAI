@@ -1,7 +1,8 @@
 # backend/app/main.py
 import os
+import logging
 from contextlib import asynccontextmanager
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -11,9 +12,15 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from app.graph_setup import agent_graph
+from app.career_tree import CHILD_TYPES, delete_tree_node, expand_tree, extract_interest_labels, initialize_tree, update_view_state, upgrade_tree_generation
 from app.rate_limiter import RateLimitUnavailable, SupabaseRateLimiter
-from app.state_manager import StatePersistenceUnavailable, get_state, save_state
+from app.state_manager import StatePersistenceUnavailable, get_account_graph_session, get_state, save_state
 from app.utils.normalization import normalize_state
+from app.career_chat import guide_message, apply_changes, explain_node, NodeExplanationNotAllowed
+from app.live_jobs import search_jobs, JobSearchUnavailable
+from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 def validate_runtime_settings() -> None:
     """Reject unsafe or incomplete configuration in production mode."""
@@ -62,7 +69,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 _allowed_origins = [
     origin.strip()
-    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
     if origin.strip()
 ]
 app.add_middleware(
@@ -159,6 +166,44 @@ class ChatInput(BaseModel):
     user_input: str = Field(min_length=1, max_length=4000)
 
 
+class CareerTreeInitializeInput(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    root_label: str = Field(min_length=1, max_length=120)
+    profile_context: dict[str, Any] = Field(default_factory=dict)
+    user_input: str | None = Field(default=None, max_length=4000)
+
+
+class CareerTreeExpandInput(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    node_id: str = Field(min_length=1, max_length=160)
+
+
+class CareerTreeViewInput(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    selected_node_id: str | None = Field(default=None, max_length=160)
+    expanded_node_ids: list[str] = Field(max_length=100)
+
+
+class CareerTreeResetInput(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class CareerGuideInput(CareerTreeResetInput):
+    message: str = Field(min_length=1, max_length=4000)
+    selected_node_id: str | None = Field(default=None, max_length=160)
+
+
+class CareerChangesInput(CareerTreeResetInput):
+    proposal_id: str = Field(min_length=1, max_length=64)
+    accept: bool
+
+
+class CareerJobsInput(CareerTreeExpandInput):
+    country: Literal["US"] = "US"
+    location: str = Field(default="", max_length=120)
+    workplace: Literal["remote", "local"]
+
+
 class AuthenticatedUser(NamedTuple):
     """Server-verified identity plus the raw token, so downstream Supabase
     calls can authenticate as this user and satisfy Row Level Security."""
@@ -243,6 +288,23 @@ def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenti
     """
     # Load previous state from Supabase (or empty dict if new session)
     state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+
+    chat_history = state.get("chat_history")
+    if not isinstance(chat_history, list):
+        chat_history = []
+        previous_input = state.get("user_input")
+        previous_response = state.get("assistant_response")
+        if isinstance(previous_input, str) and previous_input:
+            chat_history.append({"role": "user", "content": previous_input})
+        if isinstance(previous_response, str) and previous_response:
+            chat_history.append({"role": "assistant", "content": previous_response})
+    chat_history = [
+        turn for turn in chat_history
+        if isinstance(turn, dict)
+        and turn.get("role") in ("user", "assistant")
+        and isinstance(turn.get("content"), str)
+    ]
+    chat_history.append({"role": "user", "content": data.user_input})
     
     # Add user input to the state
     state["user_input"] = data.user_input
@@ -264,6 +326,10 @@ def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenti
     # Run one step of the LangGraph agent
     # Run step without loading from storage inside nodes to avoid reusing stale fields
     response, updated_state = agent_graph.step(state, session_id=None)
+
+    chat_history.append({"role": "assistant", "content": str(response)})
+    updated_state["chat_history"] = chat_history
+    updated_state["assistant_response"] = str(response)
     
     # Save updated state to Supabase
     save_state(data.session_id, updated_state, user_id=auth.id, access_token=auth.access_token)
@@ -278,13 +344,232 @@ def chatbot_endpoint(data: ChatInput, auth: AuthenticatedUser = Depends(authenti
     }
 
 
+def upgrade_saved_career_tree(session_id: str, state: dict[str, Any], auth: AuthenticatedUser) -> dict[str, Any]:
+    tree = state.get("career_tree")
+    if isinstance(tree, dict):
+        upgraded = upgrade_tree_generation(tree)
+        if upgraded is not tree:
+            state = {**state, "career_tree": upgraded}
+            save_state(session_id, state, user_id=auth.id, access_token=auth.access_token)
+    return state
+
+
+@app.get("/career-tree/session", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def get_account_career_session(auth: AuthenticatedUser = Depends(authenticated_user)):
+    session_id, state = get_account_graph_session(auth.id, auth.access_token)
+    state = upgrade_saved_career_tree(session_id, state, auth)
+    return {"session_id": session_id, "state": normalize_state(state)}
+
+
 @app.get("/session/{session_id}", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
 def get_session(session_id: str, auth: AuthenticatedUser = Depends(authenticated_user)):
     """Return the saved session state for a given session_id."""
     state = get_state(session_id, user_id=auth.id, access_token=auth.access_token)
+    state = upgrade_saved_career_tree(session_id, state, auth)
     # ensure returned state is normalized
     normalized = normalize_state(state)
     return {"session_id": session_id, "state": normalized}
+
+
+@app.post("/career-tree/initialize", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def initialize_career_tree(data: CareerTreeInitializeInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    state = upgrade_saved_career_tree(data.session_id, state, auth)
+    existing_tree = state.get("career_tree")
+    if isinstance(existing_tree, dict):
+        return {"tree": existing_tree, "response": state.get("assistant_response", "Your career map is ready to explore.")}
+
+    if data.user_input:
+        from app.config import client
+
+        try:
+            interests = extract_interest_labels(data.user_input, data.profile_context, client.chat)
+        except ValueError as exc:
+            logger.warning("Initial career interest extraction failed validation")
+            raise HTTPException(502, "The guide could not identify your interests. Please describe your goal and try again.") from exc
+        except Exception as exc:
+            logger.exception("Initial career interest extraction failed")
+            raise HTTPException(502, "The career guide is temporarily unavailable. Please try again.") from exc
+        state["user_input"] = data.user_input
+        response = "I found these interests to start your career map. Select one to explore connected industries."
+        history = state.get("chat_history") if isinstance(state.get("chat_history"), list) else []
+        history.extend([
+            {"role": "user", "content": data.user_input},
+            {"role": "assistant", "content": response},
+        ])
+        state["chat_history"] = history[-40:]
+        state["assistant_response"] = response
+    else:
+        interests = state.get("interests", [])
+        if not isinstance(interests, list) or not interests:
+            interests = data.profile_context.get("interests", [])
+        response = state.get("assistant_response", "Your career map is ready to explore.")
+    if not isinstance(interests, list) or not interests:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Share your interests before creating your career tree")
+
+    state["interests"] = interests[:12]
+    profile_context = {
+        "interests": interests[:12],
+        "industries": state.get("industries", [])[:12] if isinstance(state.get("industries"), list) else [],
+        "skills": state.get("skills", [])[:12] if isinstance(state.get("skills"), list) else [],
+        "starting_input": data.user_input,
+        **data.profile_context,
+    }
+    state["career_tree"] = initialize_tree(data.root_label, interests, profile_context)
+    save_state(data.session_id, state, user_id=auth.id, access_token=auth.access_token)
+    return {"tree": normalize_state(state["career_tree"]), "response": response}
+
+
+@app.post("/career-tree/expand", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def expand_career_tree(data: CareerTreeExpandInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    state = upgrade_saved_career_tree(data.session_id, state, auth)
+    tree = state.get("career_tree")
+    if not isinstance(tree, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Create your career tree before expanding a branch")
+    node = next((item for item in tree.get("nodes", []) if item.get("id") == data.node_id), None)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Career node not found")
+    if node.get("type") not in CHILD_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This node has no expandable branch")
+
+    from app.config import client
+
+    try:
+        updated_tree = expand_tree(tree, data.node_id, client.chat)
+    except ValueError as exc:
+        logger.warning("Career branch generation failed validation for node %s", data.node_id)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not generate sufficiently relevant suggestions for this branch. Please try again.") from exc
+    except Exception as exc:
+        logger.exception("Career branch generation failed for node %s", data.node_id)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Career recommendations are temporarily unavailable") from exc
+    state["career_tree"] = updated_tree
+    save_state(data.session_id, state, user_id=auth.id, access_token=auth.access_token)
+    return {"tree": normalize_state(updated_tree)}
+
+
+@app.post("/career-tree/delete", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def delete_career_tree_node(data: CareerTreeExpandInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    state = upgrade_saved_career_tree(data.session_id, state, auth)
+    tree = state.get("career_tree")
+    if not isinstance(tree, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Create your career tree before deleting a node")
+    try:
+        updated_tree = delete_tree_node(tree, data.node_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Career node not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    state["career_tree"] = updated_tree
+    state["interests"] = [node["label"] for node in updated_tree["nodes"] if node["type"] == "interest"]
+    save_state(data.session_id, state, user_id=auth.id, access_token=auth.access_token)
+    return {"tree": normalize_state(updated_tree)}
+
+
+@app.put("/career-tree/state", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def save_career_tree_view(data: CareerTreeViewInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    state = upgrade_saved_career_tree(data.session_id, state, auth)
+    tree = state.get("career_tree")
+    if not isinstance(tree, dict):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Create your career tree before saving its view")
+    state["career_tree"] = update_view_state(tree, data.selected_node_id, data.expanded_node_ids)
+    save_state(data.session_id, state, user_id=auth.id, access_token=auth.access_token)
+    return {"tree": normalize_state(state["career_tree"])}
+
+
+@app.post("/career-tree/reset", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def reset_career_tree(data: CareerTreeResetInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    for key in (
+        "career_tree",
+        "pending_career_changes",
+        "interests",
+        "industries",
+        "career_paths",
+        "selected_industry",
+        "job_families",
+        "selected_job_family",
+        "jobs",
+        "selected_job",
+        "skills",
+        "user_input",
+        "assistant_response",
+        "chat_history",
+    ):
+        state.pop(key, None)
+    save_state(data.session_id, state, user_id=auth.id, access_token=auth.access_token)
+    return {"status": "reset"}
+
+
+@app.post("/career-tree/message", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def career_guide_message(data: CareerGuideInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = upgrade_saved_career_tree(data.session_id, get_state(data.session_id, user_id=auth.id, access_token=auth.access_token), auth)
+    if not isinstance(state.get("career_tree"), dict):
+        raise HTTPException(409, "Create a career tree before continuing the conversation")
+    from app.config import client
+    try:
+        updated = guide_message(state, data.message, data.selected_node_id, client.chat_json)
+    except (ValueError, TypeError) as exc:
+        logger.warning("Career guide response failed validation")
+        raise HTTPException(502, "The guide could not prepare a usable response. Please try again.") from exc
+    except Exception as exc:
+        logger.exception("Career guide request failed")
+        raise HTTPException(502, "The career guide is temporarily unavailable. Please try again.") from exc
+    save_state(data.session_id, updated, user_id=auth.id, access_token=auth.access_token)
+    return {"response": updated["assistant_response"], "state": normalize_state(updated)}
+
+
+@app.post("/career-tree/explain", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def career_node_explanation(data: CareerTreeExpandInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    if not isinstance(state.get("career_tree"), dict):
+        raise HTTPException(409, "Create a career tree before explaining a node")
+    from app.config import client
+    try:
+        updated = explain_node(state, data.node_id, client.chat_json)
+    except NodeExplanationNotAllowed as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, "Career node not found") from exc
+    except (ValueError, TypeError) as exc:
+        logger.warning("Career node explanation failed validation")
+        raise HTTPException(502, "The guide could not prepare a usable explanation. Please try again.") from exc
+    except Exception as exc:
+        logger.exception("Career node explanation failed")
+        raise HTTPException(502, "The career guide is temporarily unavailable. Please try again.") from exc
+    save_state(data.session_id, updated, user_id=auth.id, access_token=auth.access_token)
+    return {"response": updated["assistant_response"], "state": normalize_state(updated)}
+
+
+@app.post("/career-tree/changes", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def career_guide_changes(data: CareerChangesInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    try:
+        updated = apply_changes(state, data.proposal_id, data.accept)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    save_state(data.session_id, updated, user_id=auth.id, access_token=auth.access_token)
+    return {"state": normalize_state(updated)}
+
+
+@app.post("/career-tree/jobs", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])
+def career_job_search(data: CareerJobsInput, auth: AuthenticatedUser = Depends(authenticated_user)):
+    state = get_state(data.session_id, user_id=auth.id, access_token=auth.access_token)
+    tree = state.get("career_tree")
+    if not isinstance(tree, dict):
+        raise HTTPException(409, "Create a career tree before searching openings")
+    try:
+        jobs = search_jobs(tree, data.node_id, data.country, data.location, data.workplace)
+    except KeyError as exc:
+        raise HTTPException(404, "Career node not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except JobSearchUnavailable as exc:
+        logger.warning("Live job search unavailable")
+        raise HTTPException(503, str(exc)) from exc
+    return {"jobs": jobs, "source": "TheirStack"}
 
 
 @app.delete("/account", dependencies=[Depends(enforce_ip_rate_limit), Depends(enforce_rate_limit)])

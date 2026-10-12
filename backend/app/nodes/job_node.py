@@ -44,4 +44,4 @@ class JobNode:
         if session_id:
             save_state(session_id, state)
 
-        return "Here are some jobs you might explore.", state
+        return "That sounds like a promising path! Here are a few roles to explore. Which one catches your eye?", state

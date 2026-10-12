@@ -19,11 +19,11 @@ export default function Navbar({ user, onLogin, onSignup, onSignOut }: Props) {
 
   return (
     <header className="sticky top-0 z-40 border-b border-primary-200 bg-background-light/90 backdrop-blur">
-      <div className="flex items-center justify-between px-12 py-4">
+      <div className="flex items-center justify-between px-4 py-3 sm:px-6">
         {/* Logo */}
         {user ? (
           <div className="flex items-center gap-2">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 28 28" fill="none" aria-hidden="true">
               <rect x="12" y="17" width="4" height="8" rx="1.5" fill="#15803d" />
               <ellipse cx="14" cy="12" rx="8" ry="8" fill="#4ade80" />
               <ellipse cx="9" cy="10" rx="5" ry="5" fill="#86efac" />
@@ -36,7 +36,7 @@ export default function Navbar({ user, onLogin, onSignup, onSignOut }: Props) {
           </div>
         ) : (
           <Link href="/" className="flex items-center gap-2">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 28 28" fill="none" aria-hidden="true">
               <rect x="12" y="17" width="4" height="8" rx="1.5" fill="#15803d" />
               <ellipse cx="14" cy="12" rx="8" ry="8" fill="#4ade80" />
               <ellipse cx="9" cy="10" rx="5" ry="5" fill="#86efac" />
@@ -50,7 +50,7 @@ export default function Navbar({ user, onLogin, onSignup, onSignOut }: Props) {
         )}
 
         {/* Desktop nav */}
-        <nav className="hidden items-center gap-5 sm:flex">
+        <nav className="hidden items-center gap-3 sm:flex">
           {user ? (
             <>
               <span className="text-sm text-neutral-700">
@@ -64,7 +64,7 @@ export default function Navbar({ user, onLogin, onSignup, onSignOut }: Props) {
               </Link>
               <button
                 onClick={onSignOut}
-                className="cursor-pointer rounded-lg bg-primary-100 px-4 py-2 text-sm font-medium text-primary-700 transition hover:bg-primary-200"
+                className="cursor-pointer rounded-lg bg-primary-100 px-3 py-2 text-sm font-medium text-primary-700 transition hover:bg-primary-200"
               >
                 Sign out
               </button>

@@ -47,7 +47,7 @@ class OpenAIClient:
     """Thin wrapper around OpenAI chat API with lazy checks."""
 
     @staticmethod
-    def chat(messages, model="gpt-4o-mini", temperature=0.4):
+    def chat(messages, model="gpt-4o-mini", temperature=0.4, json_mode=False):
         """Thin wrapper around OpenAI chat API with lazy checks.
         Args:
             messages (list): List of message dicts for chat completion.
@@ -70,6 +70,7 @@ class OpenAIClient:
                     model=model,
                     messages=messages,
                     temperature=temperature,
+                    **({"response_format": {"type": "json_object"}} if json_mode else {}),
                 )
                 # resp.choices[0].message may be an object with .content
                 msg = resp.choices[0].message
@@ -92,11 +93,15 @@ class OpenAIClient:
                 messages=messages,
                 temperature=temperature,
                 request_timeout=max(1.0, float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))),
+                **({"response_format": {"type": "json_object"}} if json_mode else {}),
             )
             return resp.choices[0].message.content
         except Exception:
             # Re-raise with clearer message
             raise
+
+    def chat_json(self, messages):
+        return self.chat(messages=messages, json_mode=True)
 
 
 client = OpenAIClient()
