@@ -54,8 +54,8 @@ def test_storage_failure_is_returned_as_service_unavailable(monkeypatch):
 
     try:
         response = TestClient(app).post(
-            "/chatbot/",
-            json={"session_id": "storage-failure-session", "user_input": "design"},
+            "/career-tree/initialize",
+            json={"session_id": "storage-failure-session", "root_label": "Avery"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -176,7 +176,7 @@ def test_ip_quota_rejects_anonymous_request_before_auth(monkeypatch):
 
 def test_oversized_request_body_is_rejected_before_route_handling():
     response = TestClient(app).post(
-        "/chatbot/",
+        "/career-tree/initialize",
         content=b"x" * (64 * 1024 + 1),
         headers={"Content-Type": "application/json"},
     )

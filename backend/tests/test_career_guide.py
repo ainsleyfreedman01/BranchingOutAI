@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
+import app.career_workflow as career_workflow
 import app.live_jobs as live_jobs
 from app.career_chat import guide_message, apply_changes
 from app.career_tree import initialize_tree, expand_tree
@@ -192,7 +193,7 @@ def test_guide_and_jobs_routes_are_authenticated_and_persist_proposals(monkeypat
     state = seeded_state()
     monkeypatch.setattr(main.rate_limiter, "allow", lambda *a: (True, 0))
     monkeypatch.setattr(main, "get_state", lambda *a, **kw: deepcopy(state))
-    monkeypatch.setattr(main, "search_jobs", lambda *a: [])
+    monkeypatch.setattr(career_workflow, "search_jobs", lambda *a: [])
 
     def save(session_id, updated, **kw):
         assert kw == {"user_id": "user", "access_token": "token"}

@@ -88,6 +88,30 @@ def test_expansion_generates_once_and_keeps_same_named_sectors_branch_specific()
     assert all(sum(edge["target"] == node["id"] for edge in tree["edges"]) == 1 for node in technology)
 
 
+def test_expansion_regenerates_a_branch_after_all_children_are_deleted():
+    tree = initialize_tree("Avery", ["Data Analytics"])
+    generated_labels = iter(["Healthcare Analytics", "Business Analytics"])
+    generation_calls = []
+
+    def fake_chat(messages):
+        if "Review career branch relevance" in messages[0]["content"]:
+            return {"accepted_indices": [0]}
+        generation_calls.append(messages)
+        return {"children": [{
+            "label": next(generated_labels),
+            "why_fit": "Applies data analysis to this domain.",
+        }]}
+
+    tree = expand_tree(tree, "interest:data-analytics", fake_chat)
+    child_id = next(edge["target"] for edge in tree["edges"] if edge["source"] == "interest:data-analytics")
+    tree = delete_tree_node(tree, child_id)
+
+    regenerated = expand_tree(tree, "interest:data-analytics", fake_chat)
+
+    assert len(generation_calls) == 2
+    assert any(node["label"] == "Business Analytics" for node in regenerated["nodes"])
+
+
 @pytest.mark.parametrize("interest", ["Jewish Studies", "Marine Biology", "Music", "AI/ML"])
 def test_every_generation_depth_keeps_its_ordered_originating_interest(interest):
     tree = initialize_tree("Avery", [interest, "Unrelated Interest"], {"interests": [interest, "Unrelated Interest"]})

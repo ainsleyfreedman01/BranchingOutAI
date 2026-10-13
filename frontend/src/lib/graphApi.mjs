@@ -49,19 +49,8 @@ async function requestJson(apiUrl, accessToken, path, options = {}, fetchImpl = 
   throw new GraphApiError(body?.detail || `The request failed (${response.status}).`, response.status);
 }
 
-export function loadGraphSession(apiUrl, accessToken, sessionId, fetchImpl) {
-  return requestJson(apiUrl, accessToken, `/session/${encodeURIComponent(sessionId)}`, {}, fetchImpl);
-}
-
 export function loadAccountGraphSession(apiUrl, accessToken, fetchImpl) {
   return requestJson(apiUrl, accessToken, "/career-tree/session", {}, fetchImpl);
-}
-
-export function sendGraphMessage(apiUrl, accessToken, sessionId, userInput, fetchImpl) {
-  return requestJson(apiUrl, accessToken, "/chatbot/", {
-    method: "POST",
-    body: JSON.stringify({ session_id: sessionId, user_input: userInput }),
-  }, fetchImpl);
 }
 
 export function initializeCareerTree(apiUrl, accessToken, sessionId, rootLabel, userInput, profileContext = {}, fetchImpl) {

@@ -242,11 +242,19 @@ def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) ->
     child_type = CHILD_TYPES.get(parent["type"])
     if child_type is None:
         raise ValueError("This node has no expandable branch")
-    if node_id in updated.get("expandedNodeIds", []):
+    has_children = any(edge.get("source") == node_id for edge in updated.get("edges", []))
+    if node_id in updated.get("expandedNodeIds", []) and has_children:
         return updated
-    if node_id in updated.get("generatedNodeIds", []):
+    if node_id in updated.get("generatedNodeIds", []) and has_children:
         updated["expandedNodeIds"].append(node_id)
         return updated
+    if not has_children:
+        updated["expandedNodeIds"] = [
+            item for item in updated.get("expandedNodeIds", []) if item != node_id
+        ]
+        updated["generatedNodeIds"] = [
+            item for item in updated.get("generatedNodeIds", []) if item != node_id
+        ]
 
     context_nodes = _career_path(updated, node_id)
     profile_context = updated.get("profileContext", {})

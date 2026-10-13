@@ -1273,16 +1273,16 @@ function GraphContent() {
                 <>
                   <ol className="space-y-4">
                     {messages.map((message, index) => (
-                      <li key={`${index}-${message.role}`} className="text-sm leading-6">
+                      <li key={`${index}-${message.role}`} className="space-y-2 text-sm leading-6">
                         {message.role === "assistant" ? (
                           <>
-                            <p className="mb-2 font-semibold text-primary-800">Guide</p>
+                            <p className="text-base font-semibold text-primary-800">Guide</p>
                             <ChatMarkdown content={canonicalizeCareerLabel(message.content)} />
                           </>
                         ) : (
                           <>
-                            <span className="mr-2 font-semibold text-primary-800">You</span>
-                            <span className="whitespace-pre-wrap text-neutral-700">{message.content}</span>
+                            <p className="text-base font-semibold text-primary-800">You</p>
+                            <p className="whitespace-pre-wrap text-neutral-700">{message.content}</p>
                           </>
                         )}
                       </li>

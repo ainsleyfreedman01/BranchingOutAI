@@ -10,26 +10,11 @@ export function getOrCreateGraphSessionId(
   cryptoApi?: Pick<Crypto, "randomUUID">,
 ): string;
 
-export function loadGraphSession(
-  apiUrl: string | undefined,
-  accessToken: string,
-  sessionId: string,
-  fetchImpl?: typeof fetch,
-): Promise<{ session_id: string; state: Record<string, unknown> }>;
-
 export function loadAccountGraphSession(
   apiUrl: string | undefined,
   accessToken: string,
   fetchImpl?: typeof fetch,
 ): Promise<{ session_id: string; state: Record<string, unknown> }>;
-
-export function sendGraphMessage(
-  apiUrl: string | undefined,
-  accessToken: string,
-  sessionId: string,
-  userInput: string,
-  fetchImpl?: typeof fetch,
-): Promise<{ response: string; state: Record<string, unknown> }>;
 
 export function initializeCareerTree(
   apiUrl: string | undefined,

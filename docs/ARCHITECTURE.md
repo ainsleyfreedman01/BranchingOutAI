@@ -1,6 +1,6 @@
 # BranchingOutAI Architecture
 
-This document describes the current career-graph application and the separate legacy chatbot API. For setup instructions, see the project root `README.md`.
+This document describes the current career-graph application. For setup instructions, see the project root `README.md`.
 
 ## Overview
 
@@ -26,15 +26,9 @@ The graph page is `frontend/src/app/graph/page.tsx`. Its API calls are collected
 5. The UI saves selection and expansion state with `PUT /career-tree/state`. Reset, deletion, chat, explanations, change proposals, and job searches use their corresponding `/career-tree/*` routes.
 6. The backend validates and normalizes data, saves it under the authenticated account, and returns JSON for the frontend to display.
 
-The graph-generation rules are in `backend/app/career_tree.py`. Each generated suggestion is associated with its exact originating-interest path and checked for relevance before it is saved. `backend/app/career_chat.py` handles guide responses, explanations, and proposed changes; proposals require user confirmation. `backend/app/live_jobs.py` validates the selected role and filters, translates the role into search titles, and queries TheirStack. Listings come from that provider; the application does not fabricate job openings.
+The compiled LangGraph in `backend/app/career_workflow.py` routes initialize, expand, guide, explain, change, and job-search operations through the existing domain functions. Graph-generation rules are in `backend/app/career_tree.py`; each generated suggestion is associated with its exact originating-interest path and checked for relevance before it is saved. `backend/app/career_chat.py` handles guide responses, explanations, and proposed changes; proposals require user confirmation. `backend/app/live_jobs.py` validates the selected role and filters, translates the role into search titles, and queries TheirStack. Listings come from that provider; the application does not fabricate job openings.
 
 Frontend helpers divide display work: `branchTree.mjs` creates a visual copy of shared nodes per path; `radialTreeLayout.mjs` calculates graph positions; and `graphAnimation.mjs` handles animation. These are separate from the backend's saved tree structure.
-
-## Legacy chatbot API
-
-`POST /chatbot/` is a separate, still-implemented API. It loads session state, clears derived fields for a new message, and uses `backend/app/graph_setup.py` with `backend/app/nodes/` to process the request. `RouterNode` selects one agent node based on the state. This older state-routed flow is not used by the current graph page; do not treat its nodes or `/chatbot/` as the graph-generation implementation.
-
-The adapters in `langchain_adapter.py`, `langgraph_adapter.py`, and their wrappers support compatibility with agent runners. The career-tree endpoints use the dedicated logic in `career_tree.py` and `career_chat.py`.
 
 ## Backend responsibilities
 

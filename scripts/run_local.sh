@@ -28,9 +28,6 @@ echo "uvicorn pid=$PID"
 echo "Waiting a moment for server to start..."
 sleep 1
 
-echo "Running example POST request"
-curl -sS -X POST "http://127.0.0.1:8000/chatbot/" -H "Content-Type: application/json" -d '{"session_id":"local-1","user_input":"I like design and data"}' | jq . || true
-
 echo "Health check:"
 curl -sS http://127.0.0.1:8000/health | jq . || true
 

@@ -13,29 +13,13 @@ BranchingOutAI is a career-exploration app. Its Next.js frontend displays an int
 - `POST /career-tree/initialize`, `/expand`, `/reset`, `/delete`, `/message`, `/explain`, `/changes`, and `/jobs`: API used by the current graph experience.
 - `PUT /career-tree/state`: Saves the current graph state.
 - `GET /career-tree/session`: Loads the signed-in user's account-level graph.
-- `POST /chatbot/`: Separate, older state-routed chat flow; it is not the API used by the current graph page.
 - `GET /health`: Liveness probe.
 - `GET /ready`: Supabase reachability probe.
 - `GET /session/{session_id}`: Retrieve persisted session state for debugging or legacy clients.
+- `backend/app/career_workflow.py`: LangGraph orchestration for current career-tree operations; domain behavior remains in `career_tree.py`, `career_chat.py`, and `live_jobs.py`.
 - `backend/app/config.py`: Backend configuration and client helpers (e.g., OpenAI and Supabase client wrappers).
 - `backend/app/state_manager.py`: `get_state` / `save_state` helpers that persist session state under a globally unique `session_id`; authenticated requests are owner-scoped by Supabase RLS.
 - `backend/app/utils/normalization.py`: Utilities to extract JSON from model responses and normalize values (lists, strings, casing).
-- `backend/app/utils/keywords.py`: Deterministic keyword extraction utilities leveraged by some nodes.
-
-### Legacy chatbot agent nodes (`backend/app/nodes/`)
-- `interests_node.py`: Extracts and normalizes user interests from `user_input`. Logic:
-- Prefers AI parsing that returns a JSON array, with robust fallbacks (split, normalization, acronym casing).
-- Canonicalizes common variants (e.g., `UX/UI`, `DevOps`, `MLOps`, `Front End Development`, `Backend Microservices`).
-- Requests 2–3 industries and cleans responses into a list.
-- `industry_node.py`: Suggests job families based on selected industries using structured prompts; updates `state["job_families"]`.
-- `job_node.py`: Suggests job titles based on a selected job family; updates `state["jobs"]`.
-- `skills_node.py`: Suggests hard and soft skills based on selected job; updates `state["skills"]`.
-
-#### Tests (`backend/tests/`)
-- `test_interests.py`: Pytest suite that invokes `InterestsNode` directly to validate interests extraction across:
-- Technical inputs, DevOps/MLOps canonicalization, UX/UI + dev variants.
-- No-commas inputs (social/policy, arts/museums).
-- Mixed one-word and multi-word interests.
 
 ### Frontend (`frontend/`)
 - `package.json`: Frontend dependencies and scripts.
@@ -53,7 +37,7 @@ BranchingOutAI is a career-exploration app. Its Next.js frontend displays an int
 ## Current Behavior Summary
 - Backend FastAPI server on `127.0.0.1:8000`; `/health` is liveness and `/ready` checks Supabase reachability.
 - The graph page calls authenticated `/career-tree/*` endpoints. It starts with interest nodes, then generates industries and roles as the user expands branches.
-- `/chatbot/` remains a separate legacy API flow. Its agent processes a request from session state; the current graph page does not use it.
+- LangGraph routes the current initialize, expand, guide, explain, change, and job-search operations through `backend/app/career_workflow.py`. Existing validation, domain logic, persistence, and response shapes remain in place.
 - Career suggestions are checked against their originating interest path before being saved. Job searches use the external TheirStack provider and return listings rather than generated placeholders.
 - The backend persists signed-in users' graph/session state in Supabase with owner-scoped row-level security.
 
@@ -77,9 +61,10 @@ curl -sS -X POST \
 -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
 -d '{
 "session_id": "'$SESSION'",
+"root_label": "You",
 "user_input": "UX/UI, front end dev, backend microservices"
 }' \
-http://127.0.0.1:8000/chatbot/ | python -m json.tool
+http://127.0.0.1:8000/career-tree/initialize | python -m json.tool
 ```
 
 ## Quick Start (Frontend)
@@ -91,14 +76,15 @@ npm run dev
 
 ## Notes
 - Keep the backend server running in a dedicated terminal. Execute curl requests in a separate terminal to avoid interrupting uvicorn.
-- The interests tests can be run via:
+- Backend tests can be run via:
 ```bash
-PYTHONPATH=backend .venv/bin/pytest -q backend/tests/test_interests.py
+PYTHONPATH=backend .venv/bin/pytest -q -m "not integration"
 ```
 
 ## Recent changes (Feb 2026)
 
-- **Optional LangGraph runtime added:** New files `backend/app/langgraph_adapter.py` and `backend/app/langgraph_wrappers.py` provide optional adapters/wrappers so the project can run with or without LangGraph installed. `graph_setup.py` now prefers a LangGraph-compatible runner when the adapter is available but falls back to the existing LangChain runner.
+- **Career workflow uses LangGraph:** `backend/app/career_workflow.py` routes current career-tree operations through a compiled LangGraph while preserving the existing API and domain behavior.
+- **LangChain:** The application does not call LangChain chain or agent APIs; `langchain-core` remains present for LangGraph's dependency stack.
 - **CI dependency pins updated:** To keep the GitHub Actions unit job reproducible we updated `backend/requirements-ci.txt` to use `starlette==0.48.0` and `typing-extensions==4.14.1` to resolve compatibility between FastAPI, Starlette and Pydantic on the CI image.
 - **Local CI reproduction command:** See the "Reproducing GitHub Actions unit job locally" section later in this README for the exact Docker command we used to verify the unit job locally.
 
@@ -141,15 +127,15 @@ curl -s http://127.0.0.1:8000/health
 curl -s http://127.0.0.1:8000/ready
 ```
 
-### Legacy Chatbot Endpoint Example
+### Initialize a Career Tree
 
-This endpoint demonstrates the separate state-routed chatbot API. The current graph frontend uses the `/career-tree/*` endpoints instead.
+This authenticated request initializes the career graph through the same API used by the frontend.
 
 ```
-curl -s -X POST http://127.0.0.1:8000/chatbot/ \
+curl -s -X POST http://127.0.0.1:8000/career-tree/initialize \
 -H 'Authorization: Bearer <valid-supabase-access-token>' \
 -H 'Content-Type: application/json' \
--d '{"session_id":"demo","user_input":"I like design"}'
+-d '{"session_id":"demo","root_label":"You","user_input":"I like design"}'
 ```
 
 ### Persistence & State Normalization
@@ -183,7 +169,7 @@ Key points:
 - There's a convenience endpoint to inspect saved state:
 `GET /session/{session_id}` — returns the normalized saved state for debug.
 
-Example: fetch a saved session after posting to `/chatbot/`:
+Example: fetch a saved session for debugging:
 ```
 curl -s -H 'Authorization: Bearer <valid-supabase-access-token>' \
   http://127.0.0.1:8000/session/test-live-1

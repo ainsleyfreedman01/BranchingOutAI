@@ -7,10 +7,8 @@ import {
   expandCareerTree,
   initializeCareerTree,
   loadAccountGraphSession,
-  loadGraphSession,
   resetCareerTree,
   saveCareerTreeView,
-  sendGraphMessage,
   continueCareerChat,
   applyCareerChanges,
   findCareerJobs,
@@ -96,17 +94,18 @@ test("session load and chat requests send the bearer token and expected payload"
       : { response: "Which industry interests you?", state: { user_input: "design" } });
   };
 
-  await loadGraphSession("http://localhost:8000/", "access-token", "session 1", fetchImpl);
-  await sendGraphMessage("http://localhost:8000", "access-token", "session-1", "design", fetchImpl);
+  await loadAccountGraphSession("http://localhost:8000/", "access-token", fetchImpl);
+  await continueCareerChat("http://localhost:8000", "access-token", "session-1", "design", null, fetchImpl);
 
-  assert.equal(calls[0].url, "http://localhost:8000/session/session%201");
+  assert.equal(calls[0].url, "http://localhost:8000/career-tree/session");
   assert.equal(calls[0].options.headers.Authorization, "Bearer access-token");
-  assert.equal(calls[1].url, "http://localhost:8000/chatbot/");
+  assert.equal(calls[1].url, "http://localhost:8000/career-tree/message");
   assert.equal(calls[1].options.headers.Authorization, "Bearer access-token");
   assert.equal(calls[1].options.headers["Content-Type"], "application/json");
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     session_id: "session-1",
-    user_input: "design",
+    message: "design",
+    selected_node_id: null,
   });
 });
 
@@ -146,7 +145,7 @@ test("career tree requests initialize, expand, and persist view state", async ()
 
 test("401 reports an expired sign-in session", async () => {
   await assert.rejects(
-    loadGraphSession("http://localhost:8000", "expired-token", "session-1", async () =>
+    loadAccountGraphSession("http://localhost:8000", "expired-token", async () =>
       response(401, { detail: "Invalid authentication token" })),
     (error) => error instanceof GraphApiError
       && error.status === 401
@@ -170,7 +169,7 @@ test("node deletion sends the session and node ID and reports failures", async (
 
 test("429 reports the server Retry-After value", async () => {
   await assert.rejects(
-    sendGraphMessage("http://localhost:8000", "access-token", "session-1", "hello", async () =>
+    continueCareerChat("http://localhost:8000", "access-token", "session-1", "hello", null, async () =>
       response(429, { detail: "Too many requests" }, { "Retry-After": "17" })),
     (error) => error instanceof GraphApiError
       && error.status === 429
