@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from copy import deepcopy
+import pytest
 
 import app.config as config
 import app.main as main
@@ -65,6 +66,47 @@ def test_tree_routes_persist_and_cache_generated_branch(monkeypatch):
         assert len([node for node in reopened.json()["tree"]["nodes"] if node["label"] == "Technology"]) == 1
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("failure", ["generation", "relevance", "provider"])
+def test_failed_expansion_does_not_persist_partial_tree(monkeypatch, failure):
+    state = {"career_tree": initialize_tree("Avery", ["Data"]), "setting": "keep"}
+    original = deepcopy(state)
+    saves = []
+    calls = []
+    monkeypatch.setattr(main, "get_state", lambda *args, **kwargs: state)
+    monkeypatch.setattr(main, "save_state", lambda *args, **kwargs: saves.append(deepcopy(args[1])))
+    monkeypatch.setattr(main.rate_limiter, "allow", lambda *args: (True, 0))
+
+    def chat(messages):
+        calls.append(messages)
+        if failure == "provider":
+            raise RuntimeError("Provider unavailable")
+        if failure == "generation":
+            return "not JSON"
+        if len(calls) == 1:
+            return {"children": [{"label": "Healthcare Analytics", "why_fit": "Relevant"}]}
+        return {"accepted_indices": []}
+
+    monkeypatch.setattr(config.client, "chat", chat)
+    app.dependency_overrides[authenticated_user] = lambda: AuthenticatedUser("tree-user", "test-token")
+    try:
+        response = TestClient(app).post("/career-tree/expand", json={
+            "session_id": "tree-session", "node_id": "interest:data",
+        })
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    expected_detail = (
+        "Career recommendations are temporarily unavailable"
+        if failure == "provider"
+        else "Could not generate sufficiently relevant suggestions for this branch. Please try again."
+    )
+    assert response.json() == {"detail": expected_detail}
+    assert len(calls) == (2 if failure == "relevance" else 1)
+    assert saves == []
+    assert state == original
 
 
 def test_profile_interests_seed_tree_without_generating_deeper_nodes(monkeypatch):

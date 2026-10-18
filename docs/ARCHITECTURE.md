@@ -28,6 +28,32 @@ The graph page is `frontend/src/app/graph/page.tsx`. Its API calls are collected
 
 The compiled LangGraph in `backend/app/career_workflow.py` routes initialize, expand, guide, explain, change, and job-search operations through the existing domain functions. Graph-generation rules are in `backend/app/career_tree.py`; each generated suggestion is associated with its exact originating-interest path and checked for relevance before it is saved. `backend/app/career_chat.py` handles guide responses, explanations, and proposed changes; proposals require user confirmation. `backend/app/live_jobs.py` validates the selected role and filters, translates the role into search titles, and queries TheirStack. Listings come from that provider; the application does not fabricate job openings.
 
+### Branch expansion workflow
+
+LangGraph controls the individual expansion steps, rather than wrapping the entire expansion in a single node:
+
+```text
+START -> expand (validate parent and cache)
+           |
+           +-- usable cached children -> END
+           |
+           +-- generation needed -> expand_context
+                                       |
+                                 expand_generate
+                                       |
+                                 expand_verify
+                                       |
+                                 expand_apply -> END
+```
+
+- `expand` copies/upgrades the input tree, validates the selected parent, reopens cached children, or clears stale cache markers when all children were deleted.
+- `expand_context` resolves the unique root-to-parent career path.
+- `expand_generate` requests and parses suggestions with the existing prompt.
+- `expand_verify` makes the second, sequential model call to check relevance. Invalid or empty accepted indices fail the request.
+- `expand_apply` attaches accepted children using the existing normalization, IDs, detail limits, and generated/expanded markers.
+
+The nodes pass typed, request-local working state: the prepared tree, path, candidate suggestions, and verified children. They reuse the same domain helpers as `expand_tree()`; the API response is still the updated tree, without intermediate workflow fields. No model retries or checkpoint persistence are introduced. The API saves to Supabase only after the workflow succeeds. Other operations retain their single-node domain delegation, and authentication, rate limits, view updates, deletion, and resets stay in the API layer.
+
 Frontend helpers divide display work: `branchTree.mjs` creates a visual copy of shared nodes per path; `radialTreeLayout.mjs` calculates graph positions; and `graphAnimation.mjs` handles animation. These are separate from the backend's saved tree structure.
 
 ## Backend responsibilities

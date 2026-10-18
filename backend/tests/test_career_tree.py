@@ -2,8 +2,18 @@ import copy
 import json
 import pytest
 
-from app.career_tree import GENERATION_VERSION, delete_tree_node, expand_tree, extract_interest_labels, initialize_tree, update_view_state, upgrade_tree_generation
+from app.career_tree import GENERATION_VERSION, delete_tree_node, expand_tree as domain_expand_tree, extract_interest_labels, initialize_tree, update_view_state, upgrade_tree_generation
+from app.career_workflow import run_career_workflow
 from app.utils.acronyms import canonicalize_acronyms
+
+
+@pytest.fixture(params=["domain", "langgraph"])
+def expand_tree(request):
+    if request.param == "domain":
+        return domain_expand_tree
+    return lambda tree, node_id, chat: run_career_workflow(
+        "expand", tree=tree, node_id=node_id, chat=chat
+    )
 
 
 def test_acronym_capitalization_preserves_words_and_proper_names():
@@ -11,7 +21,7 @@ def test_acronym_capitalization_preserves_words_and_proper_names():
     assert canonicalize_acronyms("Retail, email, HTML, OpenAI and Python") == "Retail, email, HTML, OpenAI and Python"
 
 
-def test_tree_labels_normalize_acronyms_at_every_generation_step():
+def test_tree_labels_normalize_acronyms_at_every_generation_step(expand_tree):
     interests = extract_interest_labels("ai", {}, lambda **kwargs: '["Responsible Ai", "Ml"]')
     assert interests == ["Responsible AI", "ML"]
     tree = initialize_tree("Ai Jones", ["Ai/Ml"])
@@ -57,7 +67,7 @@ def test_initial_tree_contains_interests_only():
     assert len(tree["edges"]) == 2
 
 
-def test_expansion_generates_once_and_keeps_same_named_sectors_branch_specific():
+def test_expansion_generates_once_and_keeps_same_named_sectors_branch_specific(expand_tree):
     tree = initialize_tree("Avery", ["Software", "Analytics"])
     calls = []
 
@@ -88,7 +98,7 @@ def test_expansion_generates_once_and_keeps_same_named_sectors_branch_specific()
     assert all(sum(edge["target"] == node["id"] for edge in tree["edges"]) == 1 for node in technology)
 
 
-def test_expansion_regenerates_a_branch_after_all_children_are_deleted():
+def test_expansion_regenerates_a_branch_after_all_children_are_deleted(expand_tree):
     tree = initialize_tree("Avery", ["Data Analytics"])
     generated_labels = iter(["Healthcare Analytics", "Business Analytics"])
     generation_calls = []
@@ -113,7 +123,7 @@ def test_expansion_regenerates_a_branch_after_all_children_are_deleted():
 
 
 @pytest.mark.parametrize("interest", ["Jewish Studies", "Marine Biology", "Music", "AI/ML"])
-def test_every_generation_depth_keeps_its_ordered_originating_interest(interest):
+def test_every_generation_depth_keeps_its_ordered_originating_interest(interest, expand_tree):
     tree = initialize_tree("Avery", [interest, "Unrelated Interest"], {"interests": [interest, "Unrelated Interest"]})
     parent = tree["nodes"][1]["id"]
     labels = ["Domain-specific sector", "Domain-specific role"]
@@ -139,7 +149,7 @@ def test_every_generation_depth_keeps_its_ordered_originating_interest(interest)
         expand_tree(tree, parent, lambda **kw: pytest.fail("Role expansion must not call AI"))
 
 
-def test_same_named_nodes_do_not_mix_details_or_descendants_across_interests():
+def test_same_named_nodes_do_not_mix_details_or_descendants_across_interests(expand_tree):
     tree = initialize_tree("Avery", ["Jewish Studies", "Software"])
 
     def chat_for(label):
@@ -165,7 +175,7 @@ def test_same_named_nodes_do_not_mix_details_or_descendants_across_interests():
     assert not any(node["label"] == "Jewish Studies Educator" for node in result["nodes"])
 
 
-def test_relevance_review_filters_generic_suggestions_and_requires_explanations():
+def test_relevance_review_filters_generic_suggestions_and_requires_explanations(expand_tree):
     tree = initialize_tree("Avery", ["Jewish Studies"])
 
     def fake_chat(messages):
@@ -210,7 +220,7 @@ def test_legacy_upgrade_rebuilds_descendants_once_and_preserves_starting_data():
     assert upgrade_tree_generation(upgraded) is upgraded
 
 
-def test_colliding_interest_slugs_still_have_independent_paths():
+def test_colliding_interest_slugs_still_have_independent_paths(expand_tree):
     tree = initialize_tree("Avery", ["AI/ML", "AI ML", "\u6587\u5316", "\u6559\u80b2"])
     interests = tree["nodes"][1:]
     assert len({node["id"] for node in interests}) == 4
@@ -224,7 +234,7 @@ def test_colliding_interest_slugs_still_have_independent_paths():
     assert len({node["id"] for node in tree["nodes"] if node["type"] == "industry"}) == 4
 
 
-def test_depth_upgrade_preserves_roles_and_removes_only_deeper_nodes():
+def test_depth_upgrade_preserves_roles_and_removes_only_deeper_nodes(expand_tree):
     tree = initialize_tree("Avery", ["Design"])
     tree.pop("treeDepthVersion")
     for node_id, node_type in [("sector", "industry"), ("role", "role"), ("job", "job"), ("skill", "skill")]:

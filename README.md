@@ -83,7 +83,7 @@ PYTHONPATH=backend .venv/bin/pytest -q -m "not integration"
 
 ## Recent changes (Feb 2026)
 
-- **Career workflow uses LangGraph:** `backend/app/career_workflow.py` routes current career-tree operations through a compiled LangGraph while preserving the existing API and domain behavior.
+- **Career workflow uses LangGraph:** `backend/app/career_workflow.py` routes current career-tree operations through a compiled LangGraph. Branch expansion has explicit cache/validation, context, generation, relevance-check, and tree-assembly nodes that reuse the existing domain rules and preserve the API behavior. See `docs/ARCHITECTURE.md` for the step-by-step flow.
 - **LangChain:** The application does not call LangChain chain or agent APIs; `langchain-core` remains present for LangGraph's dependency stack.
 - **CI dependency pins updated:** To keep the GitHub Actions unit job reproducible we updated `backend/requirements-ci.txt` to use `starlette==0.48.0` and `typing-extensions==4.14.1` to resolve compatibility between FastAPI, Starlette and Pydantic on the CI image.
 - **Local CI reproduction command:** See the "Reproducing GitHub Actions unit job locally" section later in this README for the exact Docker command we used to verify the unit job locally.

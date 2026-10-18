@@ -4,7 +4,7 @@ import copy
 import hashlib
 import json
 import re
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict
 from app.utils.acronyms import canonicalize_acronyms
 
 
@@ -232,8 +232,16 @@ def _relevant_children(
     return result
 
 
-def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) -> dict[str, Any]:
-    """Generate and verify children within one interest-specific career path."""
+class TreeExpansion(TypedDict):
+    tree: dict[str, Any]
+    node_id: str
+    parent: dict[str, Any]
+    child_type: str
+    cached: bool
+
+
+def prepare_tree_expansion(tree: dict[str, Any], node_id: str) -> TreeExpansion:
+    """Validate the parent and resolve cached children on a copy of the tree."""
     updated = copy.deepcopy(upgrade_tree_generation(tree))
     node_by_id = {node["id"]: node for node in updated.get("nodes", [])}
     parent = node_by_id.get(node_id)
@@ -242,12 +250,21 @@ def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) ->
     child_type = CHILD_TYPES.get(parent["type"])
     if child_type is None:
         raise ValueError("This node has no expandable branch")
+    expansion: TreeExpansion = {
+        "tree": updated,
+        "node_id": node_id,
+        "parent": parent,
+        "child_type": child_type,
+        "cached": False,
+    }
     has_children = any(edge.get("source") == node_id for edge in updated.get("edges", []))
     if node_id in updated.get("expandedNodeIds", []) and has_children:
-        return updated
+        expansion["cached"] = True
+        return expansion
     if node_id in updated.get("generatedNodeIds", []) and has_children:
         updated["expandedNodeIds"].append(node_id)
-        return updated
+        expansion["cached"] = True
+        return expansion
     if not has_children:
         updated["expandedNodeIds"] = [
             item for item in updated.get("expandedNodeIds", []) if item != node_id
@@ -255,9 +272,16 @@ def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) ->
         updated["generatedNodeIds"] = [
             item for item in updated.get("generatedNodeIds", []) if item != node_id
         ]
+    return expansion
 
-    context_nodes = _career_path(updated, node_id)
-    profile_context = updated.get("profileContext", {})
+
+def generate_branch_candidates(
+    expansion: TreeExpansion, context_nodes: list[dict[str, Any]], chat: Callable[..., Any]
+) -> list[dict[str, Any]]:
+    """Request and parse suggestions using the existing interest-specific prompt."""
+    parent = expansion["parent"]
+    child_type = expansion["child_type"]
+    profile_context = expansion["tree"].get("profileContext", {})
     messages = [
         {
             "role": "system",
@@ -293,8 +317,14 @@ def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) ->
     ]
     if not children:
         raise ValueError("The career guide did not return usable branch suggestions")
-    children = _relevant_children(children, context_nodes, child_type, chat)
+    return children
 
+
+def apply_branch_children(expansion: TreeExpansion, children: list[dict[str, Any]]) -> dict[str, Any]:
+    """Attach verified children with stable IDs and the existing detail limits."""
+    updated = expansion["tree"]
+    node_id = expansion["node_id"]
+    child_type = expansion["child_type"]
     nodes = updated.setdefault("nodes", [])
     edges = updated.setdefault("edges", [])
     existing: dict[tuple[str, str], dict[str, Any]] = {}
@@ -331,6 +361,17 @@ def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) ->
     updated.setdefault("generatedNodeIds", []).append(node_id)
     updated.pop("rebuildNotice", None)
     return updated
+
+
+def expand_tree(tree: dict[str, Any], node_id: str, chat: Callable[..., Any]) -> dict[str, Any]:
+    """Generate a branch directly using the same steps as the LangGraph workflow."""
+    expansion = prepare_tree_expansion(tree, node_id)
+    if expansion["cached"]:
+        return expansion["tree"]
+    path = _career_path(expansion["tree"], node_id)
+    candidates = generate_branch_candidates(expansion, path, chat)
+    children = _relevant_children(candidates, path, expansion["child_type"], chat)
+    return apply_branch_children(expansion, children)
 
 
 def delete_tree_node(tree: dict[str, Any], node_id: str) -> dict[str, Any]:

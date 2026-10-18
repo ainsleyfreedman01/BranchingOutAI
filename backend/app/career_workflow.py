@@ -5,7 +5,16 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.career_chat import apply_changes, explain_node, guide_message
-from app.career_tree import expand_tree, extract_interest_labels, initialize_tree
+from app.career_tree import (
+    TreeExpansion,
+    _career_path,
+    _relevant_children,
+    apply_branch_children,
+    extract_interest_labels,
+    generate_branch_candidates,
+    initialize_tree,
+    prepare_tree_expansion,
+)
 from app.live_jobs import search_jobs
 
 
@@ -13,6 +22,10 @@ class CareerWorkflowState(TypedDict, total=False):
     operation: Literal["initialize", "expand", "message", "explain", "changes", "jobs"]
     payload: dict[str, Any]
     result: Any
+    expansion: TreeExpansion
+    expansion_path: list[dict[str, Any]]
+    expansion_candidates: list[dict[str, Any]]
+    expansion_children: list[dict[str, Any]]
 
 
 def _initialize(state: CareerWorkflowState) -> dict[str, Any]:
@@ -65,7 +78,42 @@ def _initialize(state: CareerWorkflowState) -> dict[str, Any]:
 
 def _expand(state: CareerWorkflowState) -> dict[str, Any]:
     payload = state["payload"]
-    return {"result": expand_tree(payload["tree"], payload["node_id"], payload["chat"])}
+    expansion = prepare_tree_expansion(payload["tree"], payload["node_id"])
+    if expansion["cached"]:
+        return {"expansion": expansion, "result": expansion["tree"]}
+    return {"expansion": expansion}
+
+
+def _route_expansion(state: CareerWorkflowState) -> Literal["cached", "generate"]:
+    return "cached" if state["expansion"]["cached"] else "generate"
+
+
+def _expand_context(state: CareerWorkflowState) -> dict[str, Any]:
+    expansion = state["expansion"]
+    return {"expansion_path": _career_path(expansion["tree"], expansion["node_id"])}
+
+
+def _expand_generate(state: CareerWorkflowState) -> dict[str, Any]:
+    return {
+        "expansion_candidates": generate_branch_candidates(
+            state["expansion"], state["expansion_path"], state["payload"]["chat"]
+        )
+    }
+
+
+def _expand_verify(state: CareerWorkflowState) -> dict[str, Any]:
+    return {
+        "expansion_children": _relevant_children(
+            state["expansion_candidates"],
+            state["expansion_path"],
+            state["expansion"]["child_type"],
+            state["payload"]["chat"],
+        )
+    }
+
+
+def _expand_apply(state: CareerWorkflowState) -> dict[str, Any]:
+    return {"result": apply_branch_children(state["expansion"], state["expansion_children"])}
 
 
 def _message(state: CareerWorkflowState) -> dict[str, Any]:
@@ -127,7 +175,19 @@ def _build_workflow():
     graph = StateGraph(CareerWorkflowState)
     for operation, node in operations.items():
         graph.add_node(operation, node)
-        graph.add_edge(operation, END)
+        if operation != "expand":
+            graph.add_edge(operation, END)
+    graph.add_node("expand_context", _expand_context)
+    graph.add_node("expand_generate", _expand_generate)
+    graph.add_node("expand_verify", _expand_verify)
+    graph.add_node("expand_apply", _expand_apply)
+    graph.add_conditional_edges(
+        "expand", _route_expansion, {"cached": END, "generate": "expand_context"}
+    )
+    graph.add_edge("expand_context", "expand_generate")
+    graph.add_edge("expand_generate", "expand_verify")
+    graph.add_edge("expand_verify", "expand_apply")
+    graph.add_edge("expand_apply", END)
     graph.add_conditional_edges(
         START,
         lambda state: state["operation"],
